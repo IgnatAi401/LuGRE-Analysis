@@ -1,0 +1,3 @@
+inputFilePath=/Users/1gnat4y/Downloads/LuGRE
+outputFilePath=C:\Users\Albert Ai\Desktop\result
+spcOperators=Operator01,Operator02,Operator03
