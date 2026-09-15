@@ -1,8 +1,6 @@
 # LuGRE
 
-This repository contains **MATLAB analysis scripts** for the  
-[LuGRE](https://etd.gsfc.nasa.gov/our-work/lunar-gnss-receiver-experiment-lugre/)  
-(Lunar GNSS Receiver Experiment) [Mission Data](https://zenodo.org/records/16411687).
+This repository contains **MATLAB analysis scripts** for the [LuGRE](https://etd.gsfc.nasa.gov/our-work/lunar-gnss-receiver-experiment-lugre/) (Lunar GNSS Receiver Experiment) [Mission Data](https://zenodo.org/records/16411687).
 
 ## Overview
 
