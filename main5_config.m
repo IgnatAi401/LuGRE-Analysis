@@ -10,6 +10,9 @@ cfg.data.rinex = fullfile(root, 'BRDC00IGS_R_20250150000_01D_MN.rnx');
 cfg.run.maxEpochs = Inf;             % 调试时可设 5、60；Inf 表示全部
 cfg.run.plot = true;
 cfg.run.progressEvery = 60;         % 每多少历元打印进度，0 表示关闭
+cfg.truth.enabled = true;
+cfg.truth.file = fullfile(root, 'temp.xlsx');
+cfg.truth.maxGapS = 1.5;            % 仅在连续真值样本间插值，不跨数据缺口
 
 %% 方法开关（true 开启，false 关闭）
 cfg.enable.dpe = true;

@@ -14,7 +14,7 @@
 /Applications/MATLAB_R2026b.app/bin/matlab -sd /Users/ignat/Developer/LuGRE-Analysis -batch "main5"
 ```
 
-`main5` 的开关和参数统一在 [main5_config.m](main5_config.m)。轨道开启时需要 Aerospace Toolbox，并联网请求 JPL Horizons；关闭轨道后不请求月球星历，也不调用惯性坐标转换。
+`main5` 的开关和参数统一在 [main5_config.m](main5_config.m)。轨道开启时需要 Aerospace Toolbox，并联网请求 JPL Horizons；关闭轨道后不请求月球星历。真值对比也需要 Aerospace Toolbox 进行坐标转换。
 
 ### main5 开关
 
@@ -57,6 +57,12 @@ results = runLugreAnalysis(cfg);
 ```
 
 整个数据集采样率由用户确认为 **1 Hz**，入口核查所选 NAV 序列的秒间隔。每颗卫星只保留一个信号（最小 signalId 优先，同信号取最高 C/N0），以星座和 PRN 去重；Toc 用于卫星钟差，Toe 用于轨道传播并处理跨周。信号群延迟与系统间偏差尚未完整建模。
+
+### 真值对比
+
+`main5_config.m` 的 `cfg.truth.enabled` 默认开启。`temp.xlsx` 的 C 列为 GPS 秒，F:H 为地心 J2000 位置（km）；按 GPS 秒线性插值，再使用同一套 IAU/IERS 转换得到 ITRF 米。禁止外推或跨越超过 `cfg.truth.maxGapS` 的缺口。真值只用于事后评估，不参与算法。`results.truth` 保存真值位置、有效性及 DPE、LS、轨道预测、NAV 的 XYZ 误差、三维距离误差、RMSE 和中位数。真值转换需要 Aerospace Toolbox，即使关闭轨道也一样；不需要对比时可关闭 `cfg.truth.enabled`。
+
+历史结果重画：`replotLugreTruth('try1.mat')`，无需重跑定位；输出到 `results/try1_truth/`，包含三张 `.fig`、对应 PNG 和带真值统计的 `truth_comparison.mat`，原 MAT 不变。
 
 ### 坐标与时间约定
 

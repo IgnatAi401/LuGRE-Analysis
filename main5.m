@@ -14,3 +14,10 @@ dt2 = results.ls.clockM;
 dd = results.dpe.differenceNavM;
 dd2 = results.orbit.differenceNavM;
 dd3 = results.ls.differenceNavM;
+% 真值误差与原有 NAV 差异分开保存，避免混淆参考来源。
+if isfield(results,'truth')
+    groundTruth = results.truth;
+    dpeTruthErrorM = groundTruth.dpe.distanceM;
+    lsTruthErrorM = groundTruth.ls.distanceM;
+    navTruthErrorM = groundTruth.nav.distanceM;
+end

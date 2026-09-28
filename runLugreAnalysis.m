@@ -113,6 +113,9 @@ for method = {'dpe','ls'}
     end
 end
 results.orbit.differenceNavM = vecnorm(results.orbit.position-reference,2,2);
+if isfield(cfg,'truth') && cfg.truth.enabled
+    results = compareLugreTruth(results,cfg.truth);
+end
 if cfg.run.plot, plotLugreResults(results); end
 end
 

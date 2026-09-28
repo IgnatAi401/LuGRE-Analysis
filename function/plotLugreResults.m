@@ -32,4 +32,5 @@ for method = {'dpe','ls'}
     end
 end
 xlabel('X / m'); ylabel('Y / m'); zlabel('Z / m'); legend('show'); view(3);
+if isfield(results,'truth'), plotLugreTruth(results); end
 end
