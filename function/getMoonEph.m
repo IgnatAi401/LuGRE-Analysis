@@ -1,178 +1,61 @@
-% clear; clc;
-
-% t_gps_array = zeros(1,1387);
-% for i = 1:1387
-%     t_gps_array(i) = NAV(i).rxTime;
-% end
-
-
-
-function results = getMoonEph(t_gps_array)
-    % ===== 1. 时间准备 =====
-    gps_epoch = datetime(1980,1,6,0,0,0);
-    t_start = gps_epoch + seconds(min(t_gps_array));
-    t_end   = gps_epoch + seconds(max(t_gps_array));
-    
-    
-    % 关键：NASA 接受 'YYYY-MM-DD HH:MM:SS' 格式
-    t_start_str = datestr(t_start, 'yyyy-mm-dd HH:MM:SS');
-    t_end_str   = datestr(t_end,   'yyyy-mm-dd HH:MM:SS');
-    
-    % 
-    %     % ===== 2. API请求 =====
-    %     baseUrl = 'https://ssd.jpl.nasa.gov/api/horizons.api';
-    % 
-    %     % 注意：这里去掉了所有多余的 ''' 嵌套引号
-    %     % webread 会自动处理空格和特殊字符的转义 (URL Encoding)
-    %     params = struct(...
-    %         'format', 'text', ...
-    %         'COMMAND', '301', ...    
-    %         'OBJ_DATA', 'NO', ...    
-    %         'MAKE_EPHEM', 'YES', ... 
-    %         'EPHEM_TYPE', 'VECTORS', ...
-    %         'CENTER', '500@0', ...   
-    %         'REF_SYSTEM', 'J2000', ...
-    %         'OUT_UNITS', 'KM-S', ...
-    %         'TIME_TYPE', 'UTC', ...
-    %         'VEC_TABLE', '2', ...
-    %         'START_TIME', t_start_str, ... 
-    %         'STOP_TIME', t_end_str, ...
-    %         'STEP_SIZE', step_str);
-    % 
-    %     options = weboptions('Timeout', 60); % 增加超时时间
-    % 
-    %     try
-    %         data = webread(baseUrl, params, options);
-    %         disp('数据请求成功！');
-    %     catch ME
-    %         warning('API请求失败！错误信息：%s', ME.message);
-    %         % 如果失败了，在这里提前退出，返回空值
-    %         return; 
-    %     end
-    % 
-    %     % ===== 3. 解析数据 =====
-    %     lines = splitlines(string(data));
-    %     idx_start = find(contains(lines, '$$SOE')) + 1;
-    %     idx_end   = find(contains(lines, '$$EOE')) - 1;
-    % 
-    %     if isempty(idx_start) || isempty(idx_end)
-    %         warning('未能找到历表数据标识符 $$SOE/$$EOE。请检查 API 返回内容。');
-    %         disp(data); % 打印出来看 API 返回了什么错误
-    %         return;
-    %     end
-    % 
-    %     % 提取坐标和速度
-    %     % Horizons VEC_TABLE=2 的格式通常是每组 3 行
-    %     n_data = floor((idx_end - idx_start + 1) / 3);
-    %     r_all = zeros(n_data, 3);
-    %     v_all = zeros(n_data, 3);
-    % 
-    %     for k = 1:n_data
-    %         base_line = idx_start + (k-1)*3;
-    %         % 解析位置 X, Y, Z
-    %         tokens_r = regexp(lines(base_line+1), 'X =\s*([-\d.E+]+)\s*Y =\s*([-\d.E+]+)\s*Z =\s*([-\d.E+]+)', 'tokens');
-    %         if ~isempty(tokens_r)
-    %             r_all(k,:) = str2double(tokens_r{1});
-    %         end
-    %         % 解析速度 VX, VY, VZ
-    %         tokens_v = regexp(lines(base_line+2), 'VX=\s*([-\d.E+]+)\s*VY=\s*([-\d.E+]+)\s*VZ=\s*([-\d.E+]+)', 'tokens');
-    %         if ~isempty(tokens_v)
-    %             v_all(k,:) = str2double(tokens_v{1});
-    %         end
-    %     end
-    % 
-    %     % ===== 4. 插值到原时间 =====
-    %     % 生成 API 返回的对应时间序列
-    %     t_api_points = linspace(min(t_gps_array), max(t_gps_array), n_data);
-    %     r_moon = interp1(t_api_points, r_all, t_gps_array, 'spline');
-    %     v_moon = interp1(t_api_points, v_all, t_gps_array, 'spline');
-    % end
-    
-    
-    
-    
-    %% 参数设置
-    target = '301';           
-    center = '500@399';       
-    % 注意：NASA 建议时间格式为 'YYYY-MMM-DD HH:MM:SS'，例如 '2026-Mar-24 12:00:00'
-    % time_point = '2026-03-21 12:00:00'; 
-    % 
-    % time_point2 = '2026-03-21 15:00:00'; 
-    
-    base_url = 'https://ssd.jpl.nasa.gov/api/horizons.api';
-    query_url = [base_url, ...
-        '?format=json', ...
-        '&COMMAND=''', target, '''', ...
-        '&OBJ_DATA=''NO''', ...
-        '&MAKE_EPHEM=''YES''', ...
-        '&EPHEM_TYPE=''VECTORS''', ...
-        '&CENTER=''', center, '''', ...
-        '&START_TIME=''', t_start_str, '''', ...
-        '&STOP_TIME=''', t_end_str, '''', ... % 多给1分钟确保覆盖
-        '&STEP_SIZE=''1m''', ... 
-        '&VEC_TABLE=''2''', ...
-        '&REF_PLANE=''ECLIPTIC''', ... 
-        '&OUT_UNITS=''KM-S'''];
-    
-    %% 发送请求
-    
-    options = weboptions('Timeout', 60);
-    response = webread(query_url, options);
-    raw_data = response.result;
-    
-    % 检查是否存在数据标记
-    soe_idx = strfind(raw_data, '$$SOE');
-    eoe_idx = strfind(raw_data, '$$EOE');
-    
-    if isempty(soe_idx) || isempty(eoe_idx)
-        fprintf('--- API 返回错误信息 ---\n');
-        disp(raw_data); % 打印 NASA 返回的具体报错原因
-        error('未能从返回结果中定位到数据段 ($$SOE)。');
+function results = getMoonEph(gpsSeconds, cfg)
+% GETMOONEPH 地心几何月球星历：ICRF 赤道轴，UTC 时间标签。
+% 显式传 cfg：返回每个输入时刻的 [JD_UTC, X,Y,Z (km), VX,VY,VZ (km/s)]。
+% 仅传时间：兼容历史脚本，返回从起点开始的分钟采样历表。
+% 保留旧接口单位；只应将第 2:7 列乘 1000，禁止转换 JD 列。
+legacySampling = nargin < 2;
+if legacySampling
+    cfg = main5_config();
+end
+validateattributes(gpsSeconds, {'double'}, {'vector','finite','nonempty'});
+gpsSeconds = gpsSeconds(:);
+epoch = datetime(1980,1,6);
+% 前后各扩展一个采样间隔，覆盖小数秒及单历元请求。
+step = cfg.moon.stepMinutes * 60;
+startGps = floor(min(gpsSeconds)) - step;
+stopGps = ceil(max(gpsSeconds)) + step;
+startUtc = epoch + seconds(startGps - cfg.frame.gpsMinusUtcS);
+stopUtc = epoch + seconds(stopGps - cfg.frame.gpsMinusUtcS);
+response = webread(cfg.moon.url, ...
+    'format','json', 'COMMAND','''301''', 'CENTER','''500@399''', ...
+    'OBJ_DATA','''NO''', 'MAKE_EPHEM','''YES''', 'EPHEM_TYPE','''VECTORS''', ...
+    'REF_SYSTEM','''ICRF''', 'REF_PLANE','''FRAME''', 'TIME_TYPE','''UT''', ...
+    'VEC_CORR','''NONE''', 'OUT_UNITS','''KM-S''', 'VEC_TABLE','''2''', ...
+    'CSV_FORMAT','''YES''', ...
+    'START_TIME',['''' char(string(startUtc,'yyyy-MM-dd HH:mm:ss')) ''''], ...
+    'STOP_TIME',['''' char(string(stopUtc,'yyyy-MM-dd HH:mm:ss')) ''''], ...
+    'STEP_SIZE',sprintf('''%dm''', cfg.moon.stepMinutes), ...
+    weboptions('Timeout',cfg.moon.timeoutS));
+if ~isfield(response,'result')
+    error('LuGRE:HorizonsResponse', 'Horizons 未返回星历：%s', jsonencode(response));
+end
+raw = response.result;
+first = strfind(raw,'$$SOE'); last = strfind(raw,'$$EOE');
+if numel(first) ~= 1 || numel(last) ~= 1
+    error('LuGRE:HorizonsResponse', 'Horizons 星历段缺失：%s', raw);
+end
+lines = splitlines(strtrim(string(raw(first+5:last-1))));
+table = nan(numel(lines),7);
+for k = 1:numel(lines)
+    values = split(strtrim(lines(k)), ',');
+    if numel(values) < 8
+        error('LuGRE:HorizonsParse', '无法解析月球星历第 %d 行。', k);
     end
-    
-    % 提取第一行数据
-    content = raw_data(soe_idx+5 : eoe_idx-1);
-    % 假设 a 是原始长字符串
-    
-    % 1. 预分配空间（根据你的数据量估算，或者动态增长）
-    % 我们利用正则表达式把数据切分成每一个时间点的"小块"
-    % 每一个块都以 Julian Date 开头
-    blocks = regexp(content, '\d{7}\.\d{9} = A\.D\..*?(?=\d{7}\.\d{9} = A\.D\.|$)', 'match');
-    
-    n = length(blocks);
-    results = zeros(n, 7); % 存储 [JD, X, Y, Z, VX, VY, VZ]
-    
-    for i = 1:n
-        current_block = blocks{i};
-        
-        % 提取 JD
-        jd_val = regexp(current_block, '^(\d+\.\d+)', 'tokens', 'once');
-        if ~isempty(jd_val), results(i, 1) = str2double(jd_val{1}); end
-        
-        % 提取 X, Y, Z (精确匹配，确保后面紧跟空格或换行)
-        x_val = regexp(current_block, 'X\s*=\s*([\d\.E\+\-]+)', 'tokens', 'once');
-        y_val = regexp(current_block, 'Y\s*=\s*([\d\.E\+\-]+)', 'tokens', 'once');
-        z_val = regexp(current_block, 'Z\s*=\s*([\d\.E\+\-]+)', 'tokens', 'once');
-        
-        % 提取 VX, VY, VZ (明确指定匹配 VX)
-        vx_val = regexp(current_block, 'VX\s*=\s*([\d\.E\+\-]+)', 'tokens', 'once');
-        vy_val = regexp(current_block, 'VY\s*=\s*([\d\.E\+\-]+)', 'tokens', 'once');
-        vz_val = regexp(current_block, 'VZ\s*=\s*([\d\.E\+\-]+)', 'tokens', 'once');
-        
-        % 填充数据
-        if ~isempty(x_val),  results(i, 2) = str2double(x_val{1});  end
-        if ~isempty(y_val),  results(i, 3) = str2double(y_val{1});  end
-        if ~isempty(z_val),  results(i, 4) = str2double(z_val{1});  end
-        if ~isempty(vx_val), results(i, 5) = str2double(vx_val{1}); end
-        if ~isempty(vy_val), results(i, 6) = str2double(vy_val{1}); end
-        if ~isempty(vz_val), results(i, 7) = str2double(vz_val{1}); end
-    end
-    
-    % % 转换为 Table 方便观察
-    % final_table = array2table(results, 'VariableNames', ...
-    %     {'JD', 'X_km', 'Y_km', 'Z_km', 'VX_kms', 'VY_kms', 'VZ_kms'});
-    
-    % % 导出 Excel
-    % writetable(final_table, 'Processed_Ephemeris.xlsx');
-    % disp('数据已清洗完成，无重复穿插。');
+    table(k,:) = str2double(values([1,3:8]))';
+end
+assert(all(isfinite(table),'all') && all(diff(table(:,1)) > 0), ...
+    'LuGRE:HorizonsParse', '月球星历包含无效数值或时间未递增。');
+% 在小量相对时间轴插值，保留真实时间间隔；不再按 NAV 行号匹配。
+sampleSeconds = (table(:,1) - table(1,1))*86400;
+firstGps = (table(1,1) - 2444244.5)*86400 + cfg.frame.gpsMinusUtcS;
+if legacySampling
+    sampleGps = firstGps + sampleSeconds;
+    keep = sampleGps >= floor(min(gpsSeconds))-1e-3 & ...
+        sampleGps <= ceil(max(gpsSeconds))+1e-3;
+    results = table(keep,:);
+    return;
+end
+state = interp1(sampleSeconds, table(:,2:7), gpsSeconds-firstGps, 'pchip');
+assert(all(isfinite(state),'all'), 'LuGRE:MoonCoverage', '月球星历未覆盖观测时间。');
+results = [2444244.5 + (gpsSeconds-cfg.frame.gpsMinusUtcS)/86400, state];
 end

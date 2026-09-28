@@ -1,7 +1,7 @@
 % clc; clear;
 % load pos3.mat
 
-realref = readmatrix('temp.xlsx', 'Range', 'F339484:H339861');
+realref = readmatrix(fullfile(fileparts(mfilename('fullpath')), 'temp.xlsx'), 'Range', 'F339484:H339861');
 
 % N = 1387;
 M = size(NAV);

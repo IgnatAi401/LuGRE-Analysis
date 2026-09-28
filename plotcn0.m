@@ -1,6 +1,6 @@
 %% 1. 数据检查与提取
 clc; clear;
-load total.mat
+load(fullfile(fileparts(mfilename('fullpath')), 'total.mat'))
 
 fprintf('正在处理 %d 条观测数据...\n', length(RAW_all));
 

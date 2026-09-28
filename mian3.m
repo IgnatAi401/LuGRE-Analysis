@@ -1,10 +1,10 @@
 clc;clear;
 
-addpath function
-addpath reader
-addpath settings
+projectRoot = fileparts(mfilename('fullpath'));
+addpath(projectRoot, fullfile(projectRoot, 'function'), ...
+    fullfile(projectRoot, 'reader'), fullfile(projectRoot, 'settings'));
 
-[ACQfilePath, RAWfilePath, NAVfilePath] = FindTelemetryTxtFiles('/Users/1gnat4y/Downloads/LuGRE', 'OP1_0');
+[ACQfilePath, RAWfilePath, NAVfilePath] = FindTelemetryTxtFiles('/Users/ignat/Documents/LuGRE', 'OP1_0');
 disp(ACQfilePath)
 disp(RAWfilePath)
 disp(NAVfilePath)
@@ -19,12 +19,12 @@ disp(NAVfilePath)
 
 
 
-% csv_filepath = '/Users/1gnat4y/Downloads/LuGRE/L0/TLM/TLM_EPH_20250115_152133_01H_C_OP1_0.csv';
+% csv_filepath = '/Users/ignat/Documents/LuGRE/L0/TLM/TLM_EPH_20250115_152133_01H_C_OP1_0.csv';
 % RAW_sorted = match_toe(RAW_sorted, csv_filepath);
 
 
 
-filename = "BRDC00IGS_R_20250150000_01D_MN.rnx";
+filename = fullfile(projectRoot, "BRDC00IGS_R_20250150000_01D_MN.rnx");
 [gpsData, galileoData] = read_gnss_rinex(filename);
 [RAW_Pos] = getPosRAW(RAW_sorted, gpsData, galileoData);
 % [RAW_Pos] = getPosRAW_EPH(RAW_sorted, gpsData, galileoData);

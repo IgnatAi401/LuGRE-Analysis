@@ -1,5 +1,7 @@
 clc; clear;
-basePath = '/Users/1gnat4y/Downloads/LuGRE';
+projectRoot = fileparts(mfilename('fullpath'));
+addpath(fullfile(projectRoot, 'reader'));
+basePath = '/Users/ignat/Documents/LuGRE';
 
 OP_tags = {
     'OP1_0'

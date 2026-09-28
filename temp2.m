@@ -1,5 +1,5 @@
 clc;clear;
-load matlab3.mat
+load(fullfile(fileparts(mfilename('fullpath')), 'matlab3.mat'))
 
 n = numel(NAV);
 
