@@ -3,6 +3,8 @@ function test_main5()
 root = fileparts(fileparts(mfilename('fullpath')));
 addpath(root,fullfile(root,'function'));
 cfg = main5_config();
+cfg.dpe.refineStepsM = [];
+cfg.dpe.usePredictionCenter = false;
 cfg.frame.eopSource = 'manual';
 t = 1420996500;
 r = [-8e7;4e7;3e7]; v = [100;-200;30];
@@ -74,5 +76,6 @@ state = [ri;vi;3.8e8;1e8;1e7;0;1000;0];
 cfg.enable.j2 = false; a = lugreDynamics(0,state,t,cfg);
 cfg.enable.j2 = true; b = lugreDynamics(0,state,t,cfg);
 assert(norm(a(4:6)-b(4:6))>0 && isequal(a(1:3),b(1:3)));
+test_main5_review();
 fprintf('test_main5: all checks passed.\n');
 end

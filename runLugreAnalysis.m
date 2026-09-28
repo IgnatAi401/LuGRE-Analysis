@@ -13,6 +13,8 @@ assert(n > 0, 'LuGRE:NoEpochs','NAV 没有历元。');
 nav = nav(1:n);
 time = [nav.rxTime]';
 assert(all(isfinite(time)) && all(diff(time)>0),'LuGRE:EpochOrder','NAV 时间必须严格递增。');
+assert(all(abs(diff(time)-1/cfg.data.sampleRateHz)<1e-6), ...
+    'LuGRE:Sampling','NAV 时间间隔不符合配置的 1 Hz 数据约定。');
 [gps,galileo] = read_gnss_rinex(cfg.data.rinex);
 raw = getPosRAW(sortRAW(nav,raw),gps,galileo);
 reference = [[nav.posX]',[nav.posY]',[nav.posZ]'];
@@ -23,6 +25,7 @@ results.referencePosition = reference;
 blank = struct('position',nan(n,3),'clockM',nan(n,1), 'valid',false(n,1));
 results.dpe = blank; results.ls = blank;
 results.dpe.onBoundary = false(n,1);
+results.dpe.cost = nan(n,1);
 results.ls.iterations = zeros(n,1);
 results.observationCount = zeros(n,1);
 results.orbit.position = nan(n,3);
@@ -65,6 +68,7 @@ for i = 1:n
         results.dpe.clockM(i) = solution.clockM;
         results.dpe.valid(i) = solution.valid;
         results.dpe.onBoundary(i) = solution.onBoundary;
+        results.dpe.cost(i) = solution.cost;
         if solution.valid
             dpePosition = solution.position; dpeClock = solution.clockM;
         end
@@ -117,6 +121,12 @@ assert(cfg.enable.dpe || cfg.enable.ls,'LuGRE:NoMethod','DPE 和 LS 至少开启
 validateattributes(cfg.run.maxEpochs,{'double'},{'scalar','positive'});
 assert(isinf(cfg.run.maxEpochs) || fix(cfg.run.maxEpochs)==cfg.run.maxEpochs, ...
     'LuGRE:Config','maxEpochs 必须为正整数或 Inf。');
+assert(cfg.data.sampleRateHz==1,'LuGRE:Config','此数据集采样率固定为 1 Hz。');
+if ~isempty(cfg.dpe.refineStepsM)
+    validateattributes(cfg.dpe.refineStepsM,{'double'},{'row','positive','finite'});
+end
+assert(all(diff(cfg.dpe.refineStepsM)<0),'LuGRE:Config','精化步长必须递减。');
+validateattributes(cfg.dpe.rankTolerance,{'double'},{'scalar','positive','finite'});
 validateattributes(cfg.dpe.chunkSize,{'double'},{'scalar','integer','positive'});
 validateattributes(cfg.orbit.resetIntervalS,{'double'},{'scalar','positive','finite'});
 validateattributes(cfg.frame.derivativeStepS,{'double'},{'scalar','positive','finite'});

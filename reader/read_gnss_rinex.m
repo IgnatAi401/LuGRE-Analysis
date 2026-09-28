@@ -13,7 +13,7 @@ function [gpsData, galileoData] = read_gnss_rinex(filename)
     % 定义空的结构体模板
     % PRN 初始化为 0 (Double类型)
     dummyStruct = struct(...
-        'PRN', 0, 'Time', datetime, 'GPSTotalSeconds', 0, ...
+        'PRN', 0, 'Time', datetime, 'GPSTotalSeconds', 0, 'TocTotalSeconds', 0, 'ToeTotalSeconds', 0, ...
         'ClockBias', 0, 'ClockDrift', 0, 'ClockDriftRate', 0, ...
         'IODE', 0, 'Crs', 0, 'DeltaN', 0, 'M0', 0, ...
         'Cuc', 0, 'e', 0, 'Cus', 0, 'SqrtA', 0, ...
@@ -121,7 +121,9 @@ function rec = parse_nav_record_fast(lines, gps_epoch_num)
     
     % [核心需求] 计算 GPS 总秒数
     current_datenum = datenum(year, month, day, hour, minute, second);
-    rec.GPSTotalSeconds = (current_datenum - gps_epoch_num) * 86400;
+    rec.GPSTotalSeconds = round((current_datenum - gps_epoch_num) * 86400);
+    rec.TocTotalSeconds = rec.GPSTotalSeconds;
+    rec.ToeTotalSeconds = NaN;
     
     % 读取钟差
     rec.ClockBias = str2num_fast(line1(24:42));
@@ -143,6 +145,8 @@ function rec = parse_nav_record_fast(lines, gps_epoch_num)
     
     l4 = pad(lines{4}, 80);
     rec.Toe = str2num_fast(l4(5:23));
+    % 将周内 Toe 放到离 Toc 最近的一周，处理周日边界。
+    rec.ToeTotalSeconds = rec.Toe + 604800 * round((rec.TocTotalSeconds-rec.Toe)/604800);
     rec.Cic = str2num_fast(l4(24:42));
     rec.Omega0 = str2num_fast(l4(43:61));
     rec.Cis = str2num_fast(l4(62:80));

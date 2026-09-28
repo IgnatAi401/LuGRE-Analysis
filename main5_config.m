@@ -5,6 +5,7 @@ root = fileparts(mfilename('fullpath'));
 %% 数据与运行范围
 cfg.data.root = '/Users/ignat/Documents/LuGRE';
 cfg.data.window = 'OP1_0';
+cfg.data.sampleRateHz = 1;          % 用户确认整个数据集均为 1 Hz
 cfg.data.rinex = fullfile(root, 'BRDC00IGS_R_20250150000_01D_MN.rnx');
 cfg.run.maxEpochs = Inf;             % 调试时可设 5、60；Inf 表示全部
 cfg.run.plot = true;
@@ -30,6 +31,9 @@ cfg.dpe.coarseOffsetsM = -20000:1000:20000;
 cfg.dpe.fineOffsetsM = -10000:500:10000;
 cfg.dpe.clockOffsetsM = -25000:1000:10000;
 cfg.dpe.orbitWeight = 1e-5;          % 保留原值；距离惩罚系数，尚未标定
+cfg.dpe.usePredictionCenter = true; % 有轨道预测时以预测位置为搜索中心
+cfg.dpe.refineStepsM = [100, 10];   % 局部逐级精化；[] 关闭，不保证全局最优
+cfg.dpe.rankTolerance = 1e-10;
 cfg.dpe.chunkSize = 200000;         % 分块计算候选点，降低内存峰值
 
 %% LS 迭代

@@ -18,12 +18,14 @@ function [RAW_pos] = getPosRAW(RAW, gpsData, galileoData)
     
     for i = 1:numRaw
         % 1. 获取当前观测数据
+        RAW_pos(i).ECEF = nan(3,1);
+        RAW_pos(i).Vel = nan(3,1);
+        RAW_pos(i).clockBias = NaN;
         t_tx_total = RAW(i).txTime; % 这里的 txTime 是 GPS总秒数
         sigId = RAW(i).signalId;
         prn = RAW(i).svId;
         
         targetSubset = [];
-        mu_val = MU_GPS; % 默认常数
         
         % 2. 筛选对应星座和PRN的星历
         if (sigId == 0 || sigId == 1)
@@ -55,9 +57,11 @@ function [RAW_pos] = getPosRAW(RAW, gpsData, galileoData)
             continue;
         end
         
-        % 3. 核心匹配逻辑：基于 GPSTotalSeconds 找最近的星历
-        % 假设星历结构体里的 GPSTotalSeconds 代表该星历参考时间(Toe)的绝对秒数
-        [~, minIdx] = min(abs([targetSubset.GPSTotalSeconds] - t_tx_total));
+        % 3. 基于轨道参考时刻 Toe 找最近的星历
+        % GPSTotalSeconds 是 Toc；匹配实际轨道参考时刻 Toe。
+        toc = [targetSubset.GPSTotalSeconds];
+        toe = [targetSubset.Toe] + 604800*round((toc-[targetSubset.Toe])/604800);
+        [~, minIdx] = min(abs(toe - t_tx_total));
         bestEph = targetSubset(minIdx);
         
         % 4. 计算 PVT (位置和钟差)

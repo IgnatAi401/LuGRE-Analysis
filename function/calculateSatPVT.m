@@ -12,21 +12,24 @@ function [pos, vel, dts] = calculateSatPVT(eph, t_total_current, mu, omega_e_dot
     % --- 参数提取 ---
     sqrtA   = eph.SqrtA;
     e       = eph.e;
-    t_total_oe = eph.GPSTotalSeconds; 
-    
+    t_total_oc = eph.GPSTotalSeconds; % 兼容旧结构体：该字段一直是 Toc
+    t_total_oe = eph.Toe + 604800*round((t_total_oc-eph.Toe)/604800);
+    if isfield(eph,'TocTotalSeconds'), t_total_oc = eph.TocTotalSeconds; end
+    if isfield(eph,'ToeTotalSeconds'), t_total_oe = eph.ToeTotalSeconds; end
+
     M0      = eph.M0;
     delta_n = eph.DeltaN;
-    
+
     i0      = eph.i0;
     omega0  = eph.Omega0;
     omega   = eph.omega;
     dot_i   = eph.IDOT;
-    dot_omega = eph.OmegaDot; 
-    
+    dot_omega = eph.OmegaDot;
+
     cuc = eph.Cuc; cus = eph.Cus;
     crc = eph.Crc; crs = eph.Crs;
     cic = eph.Cic; cis = eph.Cis;
-    
+
     af0 = eph.ClockBias;
     af1 = eph.ClockDrift;
     af2 = eph.ClockDriftRate;
@@ -52,9 +55,10 @@ function [pos, vel, dts] = calculateSatPVT(eph, t_total_current, mu, omega_e_dot
     end
 
     % --- 钟差 ---
-    F = -2 * sqrt(mu) / c^2; 
+    F = -2 * sqrt(mu) / c^2;
     dtr = F * e * sqrtA * sin(Ek);
-    dts = (af0 + af1 * tk + af2 * tk^2 + dtr)*299792458;
+    tc = t_total_current - t_total_oc;
+    dts = (af0 + af1 * tc + af2 * tc^2 + dtr)*c;
 
     % ======================
     % 位置计算
@@ -80,7 +84,7 @@ function [pos, vel, dts] = calculateSatPVT(eph, t_total_current, mu, omega_e_dot
     xk_prime = rk * cos(uk);
     yk_prime = rk * sin(uk);
 
-    toe_week_sec = eph.Toe; 
+    toe_week_sec = eph.Toe;
     Omega_k = omega0 + (dot_omega - omega_e_dot) * tk - omega_e_dot * toe_week_sec;
 
     x = xk_prime * cos(Omega_k) - yk_prime * cos(ik) * sin(Omega_k);
@@ -97,7 +101,7 @@ function [pos, vel, dts] = calculateSatPVT(eph, t_total_current, mu, omega_e_dot
     Ek_dot = n / (1 - e*cos(Ek));
 
     % 真近点角速度
-    vk_dot = sin(Ek)*Ek_dot*(1+e*cos(vk))/(sin(vk)*(1-e*cos(Ek)));
+    vk_dot = sqrt(1-e^2)*Ek_dot/(1-e*cos(Ek));
 
     % 摄动导数
     du_dot = 2*(cus*cos_2phi - cuc*sin_2phi)*vk_dot;
