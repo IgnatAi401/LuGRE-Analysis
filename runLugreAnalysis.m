@@ -15,8 +15,8 @@ time = [nav.rxTime]';
 assert(all(isfinite(time)) && all(diff(time)>0),'LuGRE:EpochOrder','NAV 时间必须严格递增。');
 assert(all(abs(diff(time)-1/cfg.data.sampleRateHz)<1e-6), ...
     'LuGRE:Sampling','NAV 时间间隔不符合配置的 1 Hz 数据约定。');
-[gps,galileo] = read_gnss_rinex(cfg.data.rinex);
-raw = getPosRAW(sortRAW(nav,raw),gps,galileo);
+[gps,galileo] = loadRinexFiles(selectRinexFiles(cfg,time));
+raw = getPosRAW(sortRAW(nav,raw),gps,galileo,cfg.ephemeris.maxAgeS);
 reference = [[nav.posX]',[nav.posY]',[nav.posZ]'];
 results.config = cfg;
 results.nav = nav;

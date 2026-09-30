@@ -12,7 +12,7 @@ raw(1).ECEF(:)=NaN; a=getPos(1,raw); assert(size(a,1)==3);
 p=getPosRAW(r,struct([]),struct([]));
 assert(all(isnan(p.Vel)) && isempty(getPos(1,p)));
 % Toe/Toc 分离：改变钟差参考时间不能改变轨道；跨周参考正确。
-[g,~]=read_gnss_rinex(cfg.data.rinex); e=g(1);
+[g,~]=read_gnss_rinex(fullfile(root,'BRDC00IGS_R_20250150000_01D_MN.rnx')); e=g(1);
 e.M0=0; e.Toe=604790; e.ToeTotalSeconds=604800*2300-10;
 e.TocTotalSeconds=e.ToeTotalSeconds+20; e.GPSTotalSeconds=e.TocTotalSeconds;
 e.ClockDrift=1e-8; e.ClockDriftRate=0;
