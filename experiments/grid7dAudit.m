@@ -22,8 +22,7 @@ for w = 1:numel(windows)
     fprintf('\n===== %s =====\n', windows{w});
     timer = tic; base = runBatchPositioning(cfg); r.baselineSeconds = toc(timer);
     r.window = windows{w};
-    m = numel(base.gpsSeconds); rotations = zeros(3,3,m);
-    for k = 1:m, rotations(:,:,k) = icrfToItrfRotation(base.gpsSeconds(k), cfg.frame); end
+    rotations = icrfToItrfRotation(base.gpsSeconds, cfg.frame);
     timer = tic;
     solveBatchIrls(base.observations, base.gpsSeconds, rotations, base.init.state, base.moon0, base.tRef, 'dpeIrls', cfg);
     r.irlsSolveSeconds = toc(timer);

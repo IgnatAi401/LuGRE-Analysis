@@ -47,8 +47,7 @@ fprintf('%s: %d 个 RAW 历元，%d 个有观测，共 %d 条观测；>=4 星历
 observed = epochs(counts > 0);
 [~,refIndex] = min(abs(epochs - (observed(1)+observed(end))/2));
 tRef = epochs(refIndex);
-rotations = zeros(3,3,m);
-for k = 1:m, rotations(:,:,k) = icrfToItrfRotation(epochs(k), cfg.frame); end
+rotations = icrfToItrfRotation(epochs, cfg.frame);
 
 navPosition = [];
 if ~isempty(navPath)

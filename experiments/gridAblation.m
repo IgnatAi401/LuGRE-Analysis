@@ -19,8 +19,7 @@ for w = 1:numel(windows)
     base = runBatchPositioning(cfg);
     assert(isfield(base,'truth'),'LuGRE:Experiment','%s 没有真值，无法评估。',windows{w});
     epochs = base.gpsSeconds; m = numel(epochs);
-    rotations = zeros(3,3,m);
-    for k = 1:m, rotations(:,:,k) = icrfToItrfRotation(epochs(k), cfg.frame); end
+    rotations = icrfToItrfRotation(epochs, cfg.frame);
     truth = base.truth.position;
     radialUnit = truth./vecnorm(truth,2,2);
     r0 = base.init.state(1:3); v0 = base.init.state(4:6);

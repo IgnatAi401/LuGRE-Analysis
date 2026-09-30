@@ -15,6 +15,7 @@ cfg.run.plot = true;
 cfg.run.progressEvery = 10;         % 逐历元：每多少历元打印进度，0 表示关闭
 cfg.truth.enabled = true;
 cfg.truth.file = fullfile(root, 'data', 'truth.xlsx');
+cfg.truth.cacheFile = fullfile(root, 'results', 'cache', 'truth.mat'); % xlsx 解析结果缓存，源文件变化自动重建
 cfg.truth.maxGapS = 1.5;            % 仅在连续真值样本间插值，不跨数据缺口
 
 %% 逐历元方法开关（true 开启，false 关闭）
