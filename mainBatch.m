@@ -1,6 +1,6 @@
-%% LuGRE 多历元批处理 DPE 入口：参数在 main5_config.m 的 cfg.data 与 cfg.batch
+%% LuGRE 多历元批处理入口：dpeIrls / dpeGrid 与同模型 LS 对照，参数在 lugreConfig.m 的 cfg.batch
 clear; clc;
 projectRoot = fileparts(mfilename('fullpath'));
-addpath(projectRoot, fullfile(projectRoot,'function'), fullfile(projectRoot,'reader'));
-cfg = main5_config();
-batch = runLugreBatch(cfg);
+addpath(projectRoot, genpath(fullfile(projectRoot,'src')));
+cfg = lugreConfig();
+batch = runBatchPositioning(cfg);

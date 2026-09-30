@@ -1,3 +1,0 @@
-inputFilePath=/Users/ignat/Documents/LuGRE
-outputFilePath=/Users/ignat/Developer/LuGRE-Analysis/results
-spcOperators=Operator01,Operator02,Operator03
