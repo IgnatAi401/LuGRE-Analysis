@@ -11,6 +11,7 @@ cfg.data.rinex = 'auto';            % 'auto' 按观测 GPST 日期选 BRDC 文�
 cfg.data.rinexDir = fullfile(root, 'data', 'rinex'); % auto 模式下 BRDC00IGS_R_YYYYDDD0000_01D_MN.rnx 所在目录
 cfg.ephemeris.maxAgeS = 4*3600;     % 星历 Toe 与发射时刻最大间隔，超出的观测剔除
 cfg.run.maxEpochs = Inf;            % 调试时可设 5、60；Inf 表示全部
+cfg.run.skipEpochs = 0;             % 逐历元：跳过开头的 NAV 历元数（OP14 设 3，避开 178 s 空档）
 cfg.run.plot = true;
 cfg.run.progressEvery = 10;         % 逐历元：每多少历元打印进度，0 表示关闭
 cfg.truth.enabled = true;
@@ -82,6 +83,30 @@ cfg.batch.grid.finalStep = 0.1;       % 白化坐标的最终步长
 cfg.batch.grid.refineHalfWidth = 50;  % 之后外迭代（重新线性化）的白化半宽
 cfg.batch.grid.maxLevels = 80;        % 每次外迭代的最大层数
 cfg.batch.grid.chunkSize = 1024;      % 每批计算的网格点数，控制内存
+
+%% 扩展卡尔曼滤波（mainFilter；移植自 EKF-LuGRE。状态 [r; v; 钟差; 钟漂]，伪距 + Doppler，RAW 历元为轴）
+% ekfOrbit: 地心 ICRF 地球+月球动力学预测（含状态转移矩阵）；ekfCvBlend: ECEF 匀速 EKF 后与轨道预测按固定权重加权。
+% 两种方法的噪声参数保持原项目的取值（原项目以 NAV 为参考调参，未按真值标定）。
+cfg.filter.methods = {'ekfOrbit','ekfCvBlend'};
+cfg.filter.minInitSatellites = 5;     % 初始化历元最少卫星数（伪距 LS 有 1 个多余观测）
+cfg.filter.initIterations = 30;
+cfg.filter.initStepToleranceM = 1e-4;
+cfg.filter.initStd = [2000 2000 2000 20 20 20 2000 50]; % 初始标准差：位置 m、速度 m/s、钟差 m、钟漂 m/s
+cfg.filter.initCovariance = 'ls';   % 'ls': 初始化 LS 的形式协方差；'fixed': 原项目的 initStd 对角阵（远距离过度自信，OP14/OP5 发散）
+cfg.filter.gateSigma = 8;             % 归一化新息超过此值的观测剔除
+cfg.filter.maxStepS = 5;              % 轨道 RK4 子步长上限
+cfg.filter.cn0ReferenceDbHz = 35;     % 观测标准差 σ = σ_ref·10^((35-C/N0)/20)，再限幅
+cfg.filter.rangeSigmaLimitsM = [5, 150];
+cfg.filter.rangeRateSigmaLimitsMps = [0.08, 5];
+cfg.filter.ekfOrbit.accelerationPsd = 1e-3;  % 未建模加速度 PSD (m/s^2)^2/Hz
+cfg.filter.ekfOrbit.clockDriftPsd = 2;       % 钟漂随机游走 PSD (m/s^2)^2/Hz
+cfg.filter.ekfOrbit.rangeSigmaM = 120;       % 35 dB-Hz 时伪距标准差
+cfg.filter.ekfOrbit.rangeRateSigmaMps = 4;   % 35 dB-Hz 时变化率标准差
+cfg.filter.ekfCvBlend.accelerationPsd = 9;
+cfg.filter.ekfCvBlend.clockDriftPsd = 400;
+cfg.filter.ekfCvBlend.rangeSigmaM = 8;
+cfg.filter.ekfCvBlend.rangeRateSigmaMps = 0.15;
+cfg.filter.ekfCvBlend.kalmanWeight = 0.7;    % 位置/速度 = w·EKF + (1-w)·轨道预测
 
 %% 观测筛选与信噪比权重
 cfg.observation.minCount = 4;

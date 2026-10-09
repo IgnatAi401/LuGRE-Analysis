@@ -11,6 +11,9 @@ The project uses the receiver's raw GPS/Galileo pseudoranges recorded in cisluna
   - `dpeIrls`: L1 cost solved by iteratively reweighted least squares, with a spline clock model.
   - `dpeGrid`: coarse-to-fine grid over the 6-D orbit state, with the L1-optimal (weighted median) clock at each epoch.
   - `ls`: the same model with an L2 cost, used as the baseline.
+- **Extended Kalman filtering** (`mainFilter.m`): sequential pseudorange + Doppler filtering on the same epoch axis as the batch methods, with state `[position; velocity; clock bias; clock drift]`.
+  - `ekfOrbit`: prediction with Earth–Moon dynamics and the state-transition matrix in the inertial frame.
+  - `ekfCvBlend`: a constant-velocity EKF in the Earth-fixed frame, blended with an orbit prediction using a fixed weight.
 - **Evaluation**: the solutions are compared with the onboard navigation solution and a reference trajectory.
 
 ## Data
@@ -23,11 +26,12 @@ The project uses the receiver's raw GPS/Galileo pseudoranges recorded in cisluna
 ## Layout
 
 ```text
-mainEpoch.m, mainBatch.m   entry scripts
+mainEpoch.m, mainBatch.m,  entry scripts
+  mainFilter.m
 lugreConfig.m              shared configuration
-src/                       io, gnss, frames, orbit, epoch, batch, truth, plot
+src/                       io, gnss, frames, orbit, epoch, batch, filter, truth, plot
 tests/                     offline and integration tests
-experiments/               ablation and feasibility studies for the batch methods
+experiments/               method comparison, ablation and feasibility studies
 data/                      broadcast ephemerides and reference trajectory
 ```
 
@@ -36,8 +40,8 @@ data/                      broadcast ephemerides and reference trajectory
 Requirements: MATLAB with the Aerospace Toolbox, plus network access to JPL Horizons.
 
 1. Set `cfg.data.root` in `lugreConfig.m` to the local LuGRE data folder, and `cfg.data.window` to an operation window (for example `OP5_0`).
-2. Run `mainEpoch` or `mainBatch` from the project root.
-3. Run the tests with `addpath('tests'); testEpoch; testBatch`.
+2. Run `mainEpoch`, `mainBatch` or `mainFilter` from the project root.
+3. Run the tests with `addpath('tests'); testEpoch; testBatch; testFilter`.
 
 ## License
 
