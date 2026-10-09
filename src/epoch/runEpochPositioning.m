@@ -6,6 +6,7 @@ validateConfig(cfg);
 assert(~isempty(navPath),'LuGRE:DataPath','未找到窗口 %s 的 NAV 文件。',cfg.data.window);
 nav = readTelemetryNav(navPath);
 raw = readTelemetryRaw(rawPath);
+nav = nav(cfg.run.skipEpochs+1:end); % 跳过开头不连续的 NAV 历元（如 OP14 前 3 个后有 178 s 空档）
 n = min(numel(nav),cfg.run.maxEpochs);
 assert(n > 0, 'LuGRE:NoEpochs','NAV 没有历元。');
 nav = nav(1:n);
@@ -121,6 +122,7 @@ end
 function validateConfig(cfg)
 assert(cfg.enable.dpe || cfg.enable.ls,'LuGRE:NoMethod','DPE 和 LS 至少开启一种。');
 validateattributes(cfg.run.maxEpochs,{'double'},{'scalar','positive'});
+validateattributes(cfg.run.skipEpochs,{'double'},{'scalar','integer','nonnegative'});
 assert(isinf(cfg.run.maxEpochs) || fix(cfg.run.maxEpochs)==cfg.run.maxEpochs, ...
     'LuGRE:Config','maxEpochs 必须为正整数或 Inf。');
 assert(cfg.data.sampleRateHz==1,'LuGRE:Config','此数据集采样率固定为 1 Hz。');
