@@ -12,11 +12,14 @@ assert(n > 0, 'LuGRE:NoEpochs','NAV 没有历元。');
 nav = nav(1:n);
 time = [nav.rxTime]';
 assert(all(isfinite(time)) && all(diff(time)>0),'LuGRE:EpochOrder','NAV 时间必须严格递增。');
-assert(all(abs(diff(time)-1/cfg.data.sampleRateHz)<1e-6), ...
-    'LuGRE:Sampling','NAV 时间间隔不符合配置的 1 Hz 数据约定。');
+continuous = abs(diff(time)-1/cfg.data.sampleRateHz)<1e-6;
+assert(cfg.run.splitGaps || all(continuous), ...
+    'LuGRE:Sampling','NAV 时间间隔不符合配置的 1 Hz 数据约定（可开启 cfg.run.splitGaps 分段处理）。');
+segmentStart = [true; ~continuous]; % 每个连续 1 Hz 段的首历元按独立运行重新初始化
 [gps,galileo] = loadRinexFiles(selectRinexFiles(cfg,time));
 raw = addTransmitTime(raw(ismember([raw.rxTime],[nav.rxTime])),cfg.constants.c);
 raw = addSatelliteStates(raw,gps,galileo,cfg.ephemeris.maxAgeS);
+rawByEpoch = groupRawByEpoch(raw,time);
 navPosition = [[nav.posX]',[nav.posY]',[nav.posZ]'];
 results.config = cfg;
 results.nav = nav;
@@ -28,6 +31,7 @@ results.dpe.onBoundary = false(n,1);
 results.dpe.cost = nan(n,1);
 results.ls.iterations = zeros(n,1);
 results.observationCount = zeros(n,1);
+results.segmentStart = segmentStart;
 results.orbit.position = nan(n,3);
 results.orbit.enabled = cfg.enable.orbit;
 results.moon = [];
@@ -38,14 +42,18 @@ if cfg.enable.orbit
     moon(:,2:7) = moon(:,2:7)*1000; % JD_UTC 保持不变
     results.moon = moon;
 end
-origin = navPosition(1,:)' + cfg.initial.positionOffsetM(:);
-dpePosition = origin; lsPosition = origin;
-dpeClock = cfg.initial.clockBiasM; lsClock = dpeClock;
-anchorState = []; anchorTime = NaN; lastReset = -Inf;
 absTol = repmat([repmat(cfg.orbit.positionAbsToleranceM,3,1); ...
     repmat(cfg.orbit.velocityAbsToleranceMps,3,1)],2,1);
 odeOptions = odeset('RelTol',cfg.orbit.relativeTolerance,'AbsTol',absTol);
 for i = 1:n
+    if segmentStart(i)
+        origin = navPosition(i,:)' + cfg.initial.positionOffsetM(:);
+        dpePosition = origin; lsPosition = origin;
+        dpeClock = cfg.initial.clockBiasM; lsClock = dpeClock;
+        anchorState = []; anchorTime = NaN; lastReset = -Inf;
+        segmentEpoch = 0;
+    end
+    segmentEpoch = segmentEpoch + 1; % 段内序号，决定 DPE 粗/细网格与首历元无先验
     predicted = nan(3,1);
     if cfg.enable.orbit
         if isempty(anchorState)
@@ -58,12 +66,12 @@ for i = 1:n
         results.orbit.position(i,:) = predicted';
     end
     % 两种方法使用完全相同的有效观测及传播修正。
-    obs = buildObservations(selectEpochMeasurements(time(i),raw),origin,cfg);
+    obs = buildObservations(selectEpochMeasurements(time(i),rawByEpoch{i}),origin,cfg);
     results.observationCount(i) = numel(obs.range);
     if cfg.enable.dpe
         prior = predicted;
-        if i == 1, prior(:) = NaN; end % 第一历元与旧算法一样，不加先验
-        solution = solveEpochDpe(obs,dpePosition,dpeClock,prior,i,cfg);
+        if segmentEpoch == 1, prior(:) = NaN; end % 第一历元与旧算法一样，不加先验
+        solution = solveEpochDpe(obs,dpePosition,dpeClock,prior,segmentEpoch,cfg);
         results.dpe.position(i,:) = solution.position';
         results.dpe.clockM(i) = solution.clockM;
         results.dpe.valid(i) = solution.valid;
@@ -123,6 +131,7 @@ function validateConfig(cfg)
 assert(cfg.enable.dpe || cfg.enable.ls,'LuGRE:NoMethod','DPE 和 LS 至少开启一种。');
 validateattributes(cfg.run.maxEpochs,{'double'},{'scalar','positive'});
 validateattributes(cfg.run.skipEpochs,{'double'},{'scalar','integer','nonnegative'});
+validateattributes(cfg.run.splitGaps,{'logical'},{'scalar'});
 assert(isinf(cfg.run.maxEpochs) || fix(cfg.run.maxEpochs)==cfg.run.maxEpochs, ...
     'LuGRE:Config','maxEpochs 必须为正整数或 Inf。');
 assert(cfg.data.sampleRateHz==1,'LuGRE:Config','此数据集采样率固定为 1 Hz。');

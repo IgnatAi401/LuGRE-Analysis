@@ -12,6 +12,7 @@ cfg.data.rinexDir = fullfile(root, 'data', 'rinex'); % auto 模式下 BRDC00IGS_
 cfg.ephemeris.maxAgeS = 4*3600;     % 星历 Toe 与发射时刻最大间隔，超出的观测剔除
 cfg.run.maxEpochs = Inf;            % 调试时可设 5、60；Inf 表示全部
 cfg.run.skipEpochs = 0;             % 逐历元：跳过开头的 NAV 历元数（OP14 设 3，避开 178 s 空档）
+cfg.run.splitGaps = false;          % 逐历元：NAV 有空档时按连续段分别处理（每段如独立运行，从 NAV 位置重新初始化）
 cfg.run.plot = true;
 cfg.run.progressEvery = 10;         % 逐历元：每多少历元打印进度，0 表示关闭
 cfg.truth.enabled = true;
@@ -54,6 +55,10 @@ cfg.ls.rankTolerance = 1e-10;
 % dpeIrls: 加权 L1，IRLS 求解，样条钟差；ls: 同模型加权 L2 对照；
 % dpeGrid: 6 维轨道网格 + 每历元中位数钟差，不用 IRLS。
 cfg.batch.methods = {'dpeIrls','ls','dpeGrid'};
+% 运动模型。'freeFlight'：tRef 的 ICRF 位置速度 + 地月引力积分（转移段）；
+% 'lunarStatic'：月固系（DE405 主轴系，moonLibration）固定位置 p，r_ICRF = r_moon + R'*p，
+% 用于着陆后的月面窗口（OP38 起）。该模型下 dpeGrid 为 3 维网格，先验盒只用 priorPositionM。
+cfg.batch.dynamics = 'freeFlight';
 cfg.batch.clockModel = 'spline';      % 'spline': 三次 B 样条；'polynomial': 整段多项式
 cfg.batch.clockKnotSpacingS = 120;    % spline 节点间距；OP5 实测 120 s 内钟差近似二次
 cfg.batch.clockDegree = 2;            % polynomial 模式的阶数
@@ -107,6 +112,11 @@ cfg.filter.ekfCvBlend.clockDriftPsd = 400;
 cfg.filter.ekfCvBlend.rangeSigmaM = 8;
 cfg.filter.ekfCvBlend.rangeRateSigmaMps = 0.15;
 cfg.filter.ekfCvBlend.kalmanWeight = 0.7;    % 位置/速度 = w·EKF + (1-w)·轨道预测
+% ekfLunarStatic：月面静止模型（月固系固定位置 p，无过程噪声；状态 [p; 钟差; 钟漂]），需在 methods 中显式加入。
+% 钟与观测噪声沿用 ekfOrbit 的原项目取值，未标定。
+cfg.filter.ekfLunarStatic.clockDriftPsd = 2;
+cfg.filter.ekfLunarStatic.rangeSigmaM = 120;
+cfg.filter.ekfLunarStatic.rangeRateSigmaMps = 4;
 
 %% 观测筛选与信噪比权重
 cfg.observation.minCount = 4;

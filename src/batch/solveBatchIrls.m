@@ -1,13 +1,19 @@
-function solution = solveBatchIrls(obs, epochs, rotations, state0, moon0, tRef, method, cfg)
+function solution = solveBatchIrls(obs, epochs, rotations, state0, moon0, tRef, method, cfg, lunar)
 % SOLVEBATCHIRLS 多历元批处理定轨：整段观测联合估计一组状态。
 % 未知数：tRef 的地心 ICRF [r0;v0]、钟差 c*dt(t)（整段多项式或三次 B 样条）、
 % 各信号相对参考信号的常值偏差。
+% cfg.batch.dynamics = 'lunarStatic' 时状态改为月固系固定位置 p（3 维，m），位置
+% x_k = lunar.moonEcef(k,:)' + lunar.moonFixedToEcef(:,:,k)*p（computeMoonFixedFrame），不积分；
+% 此时 moon0 不使用，设计矩阵为稀疏（长窗口样条钟差有数百列），无观测支撑的样条列不参与。
 % method = 'dpeIrls'：加权 L1 伪距残差代价（IRLS 求解），可选沿法方程最弱方向一维搜索（weakSearch）；
 % method = 'ls' ：同一模型、同一观测的加权 L2 代价（高斯-牛顿），作为公平对照。
 % obs 字段：epochIndex、satPosition(ECEF, 已含 Sagnac)、range(已加卫星钟差)、weight、signalId。
 % rotations(:,:,k)：epochs(k) 的 ICRF->ECEF 矩阵。单位 m、m/s、s。
 opts = cfg.batch;
 assert(any(strcmp(method,{'dpeIrls','ls'})),'LuGRE:BatchMethod','method 必须为 dpeIrls 或 ls。');
+static = isfield(opts,'dynamics') && strcmp(opts.dynamics,'lunarStatic');
+assert(~static || nargin >= 9,'LuGRE:BatchLunar','lunarStatic 需要月固系输入 lunar。');
+nState = 6 - 3*static;
 epochs = epochs(:);
 [used, signals, reference, signal] = selectSignals(obs, opts);
 epochIndex = obs.epochIndex(used);
@@ -17,22 +23,31 @@ weight = obs.weight(used);
 tau = epochs(epochIndex) - tRef;
 halfSpan = max(max(abs(epochs(unique(epochIndex))-tRef)),1);
 clockSpan = [min(tau), max(tau)];
-clockBasis = clockDesign(tau, clockSpan, halfSpan, opts);
+clockBasis = clockDesign(tau, clockSpan, halfSpan, opts, static);
+clockKeep = true(1,size(clockBasis,2));
+if static
+    clockKeep = full(any(clockBasis,1)); % 长窗口的观测空档中可能没有任何观测
+    clockBasis = clockBasis(:,clockKeep);
+end
 signal = signal(used);
 biasSignals = signals(signals ~= reference);
 bias = zeros(numel(range),numel(biasSignals));
 for k = 1:numel(biasSignals), bias(:,k) = signal == biasSignals(k); end
-nParam = 6 + size(clockBasis,2) + size(bias,2);
+nParam = nState + size(clockBasis,2) + size(bias,2);
 assert(numel(range) > nParam,'LuGRE:BatchObservations','观测数 %d 不足以估计 %d 个参数。', ...
     numel(range),nParam);
 
 state = state0(:);
 solution = struct('method',method,'converged',false,'iterations',0,'weakSearch',[],'onBoundary',false);
 for outer = 1:opts.maxOuterIterations
-    [A, y] = linearize(state, moon0, tRef, epochs, rotations, epochIndex, satPosition, ...
-        range, tau, clockBasis, bias, cfg);
+    if static
+        [A, y] = linearizeStatic(state, lunar, epochIndex, satPosition, range, clockBasis, bias);
+    else
+        [A, y] = linearize(state, moon0, tRef, epochs, rotations, epochIndex, satPosition, ...
+            range, tau, clockBasis, bias, cfg);
+    end
     scaled = sqrt(weight).*(A./columnNorm(A));
-    assert(rank(scaled) == nParam,'LuGRE:BatchRank','批处理法方程秩亏，几何或参数设置不可观测。');
+    assert(fullColumnRank(scaled, nParam),'LuGRE:BatchRank','批处理法方程秩亏，几何或参数设置不可观测。');
     if strcmp(method,'ls')
         p = solveWeighted(A, y, weight);
     else
@@ -43,9 +58,9 @@ for outer = 1:opts.maxOuterIterations
             solution.onBoundary = solution.onBoundary || search.onBoundary;
         end
     end
-    state = state + p(1:6);
+    state = state + p(1:nState);
     solution.iterations = outer;
-    if norm(p(1:3)) < opts.positionToleranceM && norm(p(4:6))*halfSpan < opts.positionToleranceM
+    if norm(p(1:3)) < opts.positionToleranceM && (static || norm(p(4:6))*halfSpan < opts.positionToleranceM)
         solution.converged = true;
         break;
     end
@@ -54,14 +69,18 @@ if ~solution.converged
     warning('LuGRE:BatchNotConverged','%s 批处理 %d 次外迭代未收敛。',upper(method),outer);
 end
 % 在最终状态重新线性化，线性参数（钟差、偏差）与最终轨道一致。
-[A, y] = linearize(state, moon0, tRef, epochs, rotations, epochIndex, satPosition, ...
-    range, tau, clockBasis, bias, cfg);
+if static
+    [A, y] = linearizeStatic(state, lunar, epochIndex, satPosition, range, clockBasis, bias);
+else
+    [A, y] = linearize(state, moon0, tRef, epochs, rotations, epochIndex, satPosition, ...
+        range, tau, clockBasis, bias, cfg);
+end
 if strcmp(method,'ls')
     p = solveWeighted(A, y, weight);
 else
     p = irlsL1(A, y, weight, p, opts);
 end
-state = state + p(1:6); % 剩余轨道修正低于收敛阈值，与线性化残差一致
+state = state + p(1:nState); % 剩余轨道修正低于收敛阈值，与线性化残差一致
 residual = y - A*p;
 if strcmp(method,'ls')
     solution.cost = sum(weight.*residual.^2);
@@ -73,24 +92,34 @@ end
 % 形式协方差（按残差尺度），列缩放后求逆以保持数值稳定。
 norms = columnNorm(A);
 scaled = sqrt(weight).*(A./norms);
-covariance = scale^2 * (inv(scaled'*scaled)./(norms'*norms));
+covariance = scale^2 * (inv(full(scaled'*scaled))./(norms'*norms));
 
-[positionIcrf, velocityIcrf] = propagateArc(state, moon0, tRef, epochs, cfg);
 m = numel(epochs);
-positionEcef = zeros(m,3); formalStd = zeros(m,1);
 epochTau = epochs - tRef;
-for k = 1:m
-    positionEcef(k,:) = (rotations(:,:,k)*positionIcrf(k,:)')';
-    map = rotations(:,:,k)*[eye(3), epochTau(k)*eye(3)];
-    formalStd(k) = sqrt(trace(map*covariance(1:6,1:6)*map'));
+if static
+    % 月固系到 ECEF 是正交变换，三维形式标准差各历元相同；速度未输出。
+    positionEcef = lunar.moonEcef + permute(pagemtimes(lunar.moonFixedToEcef, state), [3 1 2]);
+    velocityIcrf = nan(m,3);
+    formalStd = repmat(sqrt(trace(covariance(1:3,1:3))), m, 1);
+else
+    [positionIcrf, velocityIcrf] = propagateArc(state, moon0, tRef, epochs, cfg);
+    positionEcef = zeros(m,3); formalStd = zeros(m,1);
+    for k = 1:m
+        positionEcef(k,:) = (rotations(:,:,k)*positionIcrf(k,:)')';
+        map = rotations(:,:,k)*[eye(3), epochTau(k)*eye(3)];
+        formalStd(k) = sqrt(trace(map*covariance(1:6,1:6)*map'));
+    end
 end
-clockColumns = 7:6+size(clockBasis,2);
+clockColumns = nState+1:nState+size(clockBasis,2);
+solution.dynamics = ternary(static,'lunarStatic','freeFlight');
 solution.state = state;
 solution.tRef = tRef;
 solution.positionEcef = positionEcef;
 solution.velocityIcrf = velocityIcrf;
-solution.clockM = clockDesign(epochTau, clockSpan, halfSpan, opts)*p(clockColumns);
+epochBasis = clockDesign(epochTau, clockSpan, halfSpan, opts, static);
+solution.clockM = full(epochBasis(:,clockKeep)*p(clockColumns));
 solution.clockM(epochTau < clockSpan(1) | epochTau > clockSpan(2)) = NaN; % 不外推钟差
+solution.clockM(full(any(epochBasis(:,~clockKeep),2))) = NaN; % 依赖未估计样条列的历元（观测空档）
 solution.clockCoefficientsM = p(clockColumns);
 solution.referenceSignal = reference;
 solution.biasSignals = biasSignals(:);
@@ -104,17 +133,23 @@ solution.observationCount = numel(residual);
 solution.parameterCount = nParam;
 end
 
-function basis = clockDesign(tau, span, halfSpan, opts)
+function basis = clockDesign(tau, span, halfSpan, opts, sparseOutput)
 % 钟差基函数。'polynomial'：(tau/halfSpan)^0..clockDegree；
 % 'spline'：均匀节点三次 B 样条（二阶导连续），节点间距 clockKnotSpacingS。
+% sparseOutput=true 时返回稀疏矩阵（样条每行只有 4 个非零元，直接按非零元构造）。
 tau = tau(:);
 switch opts.clockModel
     case 'polynomial'
         basis = (tau/halfSpan).^(0:opts.clockDegree);
+        if sparseOutput, basis = sparse(basis); end
     case 'spline'
         spacing = opts.clockKnotSpacingS;
         % ceil+3 保证每个基函数在 [span(1), span(2)] 内都有非零支撑。
         count = ceil((span(2)-span(1))/spacing) + 3;
+        if sparseOutput
+            basis = sparseSpline(tau, span(1), spacing, count);
+            return;
+        end
         u = (tau - span(1))/spacing + 3 - (0:count-1); % 第 i 个基函数的局部坐标
         basis = zeros(size(u));
         piece = floor(u);
@@ -125,6 +160,23 @@ switch opts.clockModel
     otherwise
         error('LuGRE:Config','clockModel 必须为 polynomial 或 spline。');
 end
+end
+
+function basis = sparseSpline(tau, start, spacing, count)
+% 与 clockDesign 的稠密样条逐元相同：第 i 个基函数局部坐标 u = (tau-start)/spacing + 3 - i，
+% 非零的只有 floor(u) 为 0..3 的 4 个 i。
+shifted = (tau - start)/spacing + 3;
+column = floor(shifted) - (0:3);           % 0 起的基函数编号
+u = shifted - column;
+piece = floor(u);
+value = zeros(size(u));
+a = piece==0; value(a) = u(a).^3/6;
+b = piece==1; value(b) = (-3*u(b).^3 + 12*u(b).^2 - 12*u(b) + 4)/6;
+c = piece==2; value(c) = (3*u(c).^3 - 24*u(c).^2 + 60*u(c) - 44)/6;
+d = piece==3; value(d) = (4-u(d)).^3/6;
+row = repmat((1:numel(tau))', 1, 4);
+keep = column >= 0 & column < count & piece >= 0 & piece <= 3;
+basis = sparse(row(keep), column(keep)+1, value(keep), numel(tau), count);
 end
 
 function [used, signals, reference, signal] = selectSignals(obs, opts)
@@ -169,6 +221,28 @@ A = [g, g.*tau, clockBasis, bias];
 y = range - distance;
 end
 
+function [A, y] = linearizeStatic(p, lunar, epochIndex, satPosition, range, clockBasis, bias)
+% 月固系静止模型：x_k = c_k + M_k*p 对 p 线性，偏导 d(range)/dp = 视线单位向量 * M_k，不积分、无 STM。
+positionEcef = lunar.moonEcef + permute(pagemtimes(lunar.moonFixedToEcef, p), [3 1 2]);
+los = positionEcef(epochIndex,:) - satPosition;
+distance = vecnorm(los,2,2);
+unit = los./distance;
+g = permute(pagemtimes(permute(unit,[3 2 1]), lunar.moonFixedToEcef(:,:,epochIndex)), [3 2 1]);
+A = [sparse(g), clockBasis, sparse(bias)];
+y = range - distance;
+end
+
+function ok = fullColumnRank(scaled, nParam)
+% 稠密：rank（SVD）；稀疏（lunarStatic 长窗口）：QR 的 R 对角元，阈值与 rank 的默认阈值同量级。
+if issparse(scaled)
+    R = qr(scaled, 0);
+    d = abs(full(diag(R)));
+    ok = numel(d) == nParam && min(d) > max(size(scaled))*eps(max(d));
+else
+    ok = rank(scaled) == nParam;
+end
+end
+
 function p = solveWeighted(A, y, weight)
 % 列缩放后用 QR（反斜杠）求解，避免形成病态正规方程。
 scale = columnNorm(A);
@@ -195,7 +269,7 @@ scale = columnNorm(A);
 residual = y - A*p;
 omega = weight./max(abs(residual),opts.irlsEpsilonM);
 scaled = A./scale;
-normal = scaled'*(omega.*scaled);
+normal = full(scaled'*(omega.*scaled));
 [vectors, values] = eig((normal+normal')/2);
 [~,weakest] = min(diag(values));
 direction = vectors(:,weakest)./scale';
@@ -220,6 +294,14 @@ search = struct('offsetsM',offsets,'cost',cost,'bestOffsetM',offsets(best), ...
 end
 
 function n = columnNorm(A)
-n = vecnorm(A,2,1);
+if issparse(A)
+    n = full(sqrt(sum(A.^2,1)));
+else
+    n = vecnorm(A,2,1);
+end
 n(n==0) = 1;
+end
+
+function out = ternary(condition, a, b)
+if condition, out = a; else, out = b; end
 end
