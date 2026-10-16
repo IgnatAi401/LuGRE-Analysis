@@ -1,4 +1,4 @@
-function solution = solveBatchGrid(obs, epochs, rotations, state0, moon0, tRef, cfg)
+function solution = solveBatchGrid(obs, epochs, rotations, state0, moon0, tRef, cfg, lunar)
 % SOLVEBATCHGRID 多历元批处理网格 DPE：不用 IRLS，直接网格搜索加权 L1 代价。
 % 未知数：tRef 的地心 ICRF [r0;v0]（6 维网格）与每个历元的钟差 c*dt_k（第 7 维）。
 % 给定轨道时，历元 k 的 L1 最优钟差就是该历元残差的加权中位数，等价于无限细的钟差网格，
@@ -9,7 +9,12 @@ function solution = solveBatchGrid(obs, epochs, rotations, state0, moon0, tRef, 
 %     （消去钟差后）是凸函数，逐级细化收敛到全局最优；外迭代重新积分并线性化。
 % 只有 1 颗星的历元钟差吸收全部残差，不含轨道信息，不参与搜索。
 % 输入与 solveBatchIrls 相同；输出字段与之兼容（无信号偏差），search 字段记录网格过程。
+% cfg.batch.dynamics = 'lunarStatic'：状态为月固系固定位置 p（3 维网格，每级 P^3 点），
+% 位置对 p 线性（见 solveBatchIrls），先验盒只用 priorPositionM。
 opts = cfg.batch; g = opts.grid;
+static = isfield(opts,'dynamics') && strcmp(opts.dynamics,'lunarStatic');
+assert(~static || nargin >= 8,'LuGRE:BatchLunar','lunarStatic 需要月固系输入 lunar。');
+nState = 6 - 3*static;
 validateattributes(g.pointsPerAxis,{'double'},{'scalar','integer','odd','>=',3});
 epochs = epochs(:);
 m = numel(epochs);
@@ -18,10 +23,10 @@ weight = obs.weight(:);
 counts = accumarray(epochIndex, 1, [m 1]);
 search = counts(epochIndex) >= 2;
 multi = nnz(counts >= 2);
-assert(nnz(search) > 6 + multi, 'LuGRE:BatchObservations', ...
-    '多星历元观测 %d 条，不足以估计 6 个轨道参数与 %d 个历元钟差。', nnz(search), multi);
+assert(nnz(search) > nState + multi, 'LuGRE:BatchObservations', ...
+    '多星历元观测 %d 条，不足以估计 %d 个状态参数与 %d 个历元钟差。', nnz(search), nState, multi);
 layout = epochLayout(epochIndex(search), weight(search));
-offsets = gridOffsets(g.pointsPerAxis);
+offsets = gridOffsets(g.pointsPerAxis, nState);
 tau = epochs - tRef;
 halfSpan = max(max(abs(tau(counts > 0))), 1);
 
@@ -30,23 +35,28 @@ solution = struct('method','dpeGrid','converged',false,'iterations',0,'weakSearc
 history = struct('levels',{},'points',{},'boundaryMoves',{},'shiftPositionM',{},'shiftVelocityMps',{});
 timer = tic;
 for outer = 1:opts.maxOuterIterations
-    [H, y] = linearize(state, moon0, tRef, epochs, rotations, obs, cfg);
+    if static
+        [H, y] = linearizeStatic(state, lunar, obs);
+    else
+        [H, y] = linearize(state, moon0, tRef, epochs, rotations, obs, cfg);
+    end
     T = whitening(H(search,:), layout);
     if outer == 1
         % 先验盒 |dr|<=priorPositionM、|dv|<=priorVelocityMps 映射到白化坐标的各轴半宽
         Tinv = inv(T);
-        half = vecnorm(Tinv(:,1:3),2,2)*g.priorPositionM + vecnorm(Tinv(:,4:6),2,2)*g.priorVelocityMps;
+        half = vecnorm(Tinv(:,1:3),2,2)*g.priorPositionM;
+        if ~static, half = half + vecnorm(Tinv(:,4:6),2,2)*g.priorVelocityMps; end
     else
-        half = g.refineHalfWidth*ones(6,1);
+        half = g.refineHalfWidth*ones(nState,1);
     end
     [u, info] = coarseToFine(H(search,:)*T, y(search), layout, half, offsets, g);
     dx = T*u;
     state = state + dx;
-    info.shiftPositionM = norm(dx(1:3)); info.shiftVelocityMps = norm(dx(4:6));
+    info.shiftPositionM = norm(dx(1:3)); info.shiftVelocityMps = norm(dx(4:end));
     history(end+1) = info; %#ok<AGROW>
     solution.iterations = outer;
     solution.onBoundary = solution.onBoundary || info.levels >= g.maxLevels;
-    if norm(dx(1:3)) < opts.positionToleranceM && norm(dx(4:6))*halfSpan < opts.positionToleranceM
+    if norm(dx(1:3)) < opts.positionToleranceM && (static || norm(dx(4:6))*halfSpan < opts.positionToleranceM)
         solution.converged = true;
         break;
     end
@@ -59,11 +69,21 @@ if solution.onBoundary
 end
 
 % 最终状态处：每历元钟差 = 加权中位数，残差与形式协方差（每历元钟差模型）。
-[H, y, Phi, positionIcrf, velocityIcrf] = linearize(state, moon0, tRef, epochs, rotations, obs, cfg);
+if static
+    [H, y, positionEcef] = linearizeStatic(state, lunar, obs);
+    velocityIcrf = nan(m,3);
+else
+    [H, y, Phi, positionIcrf, velocityIcrf] = linearize(state, moon0, tRef, epochs, rotations, obs, cfg);
+end
 clock = nan(m,1);
-for k = find(counts > 0)'
-    rows = epochIndex == k;
-    clock(k) = weightedMedian(y(rows), weight(rows));
+% 按历元分组（稳定排序，组内保持原观测顺序，与逐历元 epochIndex == k 取行相同）；
+% 长窗口（数万历元）逐历元扫描全部观测太慢。
+[sortedIndex, sorter] = sort(epochIndex);
+groupEnd = [find(diff(sortedIndex)); numel(sortedIndex)];
+groupStart = [1; groupEnd(1:end-1)+1];
+for j = 1:numel(groupStart)
+    rows = sorter(groupStart(j):groupEnd(j));
+    clock(sortedIndex(groupStart(j))) = weightedMedian(y(rows), weight(rows));
 end
 residual = y - clock(epochIndex);
 solution.cost = sum(weight(search).*abs(residual(search)));
@@ -71,12 +91,17 @@ scale = 1.4826*median(sqrt(weight(search)).*abs(residual(search)));
 T = whitening(H(search,:), layout);
 covariance = scale^2 * (T*T'); % T'*(H'WH，历元内去均值)*T = I
 
-positionEcef = zeros(m,3); formalStd = zeros(m,1);
-for k = 1:m
-    positionEcef(k,:) = (rotations(:,:,k)*positionIcrf(k,:)')';
-    map = rotations(:,:,k)*Phi(:,:,k);
-    formalStd(k) = sqrt(trace(map*covariance*map'));
+if static
+    formalStd = repmat(sqrt(trace(covariance)), m, 1); % 月固系到 ECEF 为正交变换
+else
+    positionEcef = zeros(m,3); formalStd = zeros(m,1);
+    for k = 1:m
+        positionEcef(k,:) = (rotations(:,:,k)*positionIcrf(k,:)')';
+        map = rotations(:,:,k)*Phi(:,:,k);
+        formalStd(k) = sqrt(trace(map*covariance*map'));
+    end
 end
+solution.dynamics = ternary(static,'lunarStatic','freeFlight');
 solution.state = state;
 solution.tRef = tRef;
 solution.positionEcef = positionEcef;
@@ -92,7 +117,7 @@ solution.robustSigmaM = scale;
 solution.used = true(size(obs.range));
 solution.residualM = residual;
 solution.observationCount = nnz(search);
-solution.parameterCount = 6 + multi;
+solution.parameterCount = nState + multi;
 solution.search = struct('history',history,'seconds',toc(timer), ...
     'pointsPerAxis',g.pointsPerAxis,'totalPoints',sum([history.points]));
 end
@@ -119,6 +144,17 @@ for k = unique(idx)'
     rows = idx == k;
     H(rows,:) = unit(rows,:)*rotations(:,:,k)*Phi(:,:,k);
 end
+y = obs.range(:) - distance;
+end
+
+function [H, y, positionEcef] = linearizeStatic(p, lunar, obs)
+% 月固系静止模型：x_k = c_k + M_k*p，偏导为视线单位向量 * M_k（精确线性，无 STM）。
+positionEcef = lunar.moonEcef + permute(pagemtimes(lunar.moonFixedToEcef, p), [3 1 2]);
+idx = obs.epochIndex(:);
+los = positionEcef(idx,:) - obs.satPosition;
+distance = vecnorm(los,2,2);
+unit = los./distance;
+H = permute(pagemtimes(permute(unit,[3 2 1]), lunar.moonFixedToEcef(:,:,idx)), [3 2 1]);
 y = obs.range(:) - distance;
 end
 
@@ -149,7 +185,7 @@ function [u, info] = coarseToFine(HT, y, layout, half, offsets, g)
 % 所有轴步长到 finalStep 且最优点在内部时停止。
 reach = (g.pointsPerAxis - 1)/2;
 step = max(half/reach, g.finalStep);
-u = zeros(6,1);
+u = zeros(size(HT,2),1);
 info = struct('levels',0,'points',0,'boundaryMoves',0,'shiftPositionM',NaN,'shiftVelocityMps',NaN);
 for level = 1:g.maxLevels
     U = u + step.*offsets;
@@ -214,10 +250,10 @@ layout = struct('group',group,'weight',weight,'order',order,'paddedWeight',padde
     'equalWeights',all(weight == weight(1)));
 end
 
-function offsets = gridOffsets(P)
+function offsets = gridOffsets(P, dims)
 reach = (P - 1)/2;
-axes = repmat({-reach:reach}, 1, 6);
-[a{1:6}] = ndgrid(axes{:});
+axes = repmat({-reach:reach}, 1, dims);
+[a{1:dims}] = ndgrid(axes{:});
 offsets = cell2mat(cellfun(@(x)x(:)', a', 'UniformOutput', false));
 end
 
@@ -225,4 +261,8 @@ function value = weightedMedian(x, w)
 [x, order] = sort(x(:)); w = w(order);
 cumulative = cumsum(w);
 value = x(find(cumulative >= cumulative(end)/2, 1));
+end
+
+function out = ternary(condition, a, b)
+if condition, out = a; else, out = b; end
 end

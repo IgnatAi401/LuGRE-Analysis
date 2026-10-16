@@ -11,9 +11,11 @@ The project uses the receiver's raw GPS/Galileo pseudoranges recorded in cisluna
   - `dpeIrls`: L1 cost solved by iteratively reweighted least squares, with a spline clock model.
   - `dpeGrid`: coarse-to-fine grid over the 6-D orbit state, with the L1-optimal (weighted median) clock at each epoch.
   - `ls`: the same model with an L2 cost, used as the baseline.
+  - For windows after the lunar landing, `cfg.batch.dynamics = 'lunarStatic'` replaces the orbit with a fixed position in the Moon-fixed frame (DE405 principal axes), which is mapped to the Earth-fixed frame through the lunar ephemeris and orientation. `dpeGrid` then searches a 3-D grid.
 - **Extended Kalman filtering** (`mainFilter.m`): sequential pseudorange + Doppler filtering on the same epoch axis as the batch methods, with state `[position; velocity; clock bias; clock drift]`.
   - `ekfOrbit`: prediction with Earth–Moon dynamics and the state-transition matrix in the inertial frame.
   - `ekfCvBlend`: a constant-velocity EKF in the Earth-fixed frame, blended with an orbit prediction using a fixed weight.
+  - `ekfLunarStatic`: for the lunar surface, with state `[Moon-fixed position; clock bias; clock drift]` and no process noise on the position.
 - **Evaluation**: the solutions are compared with the onboard navigation solution and a reference trajectory.
 
 ## Data

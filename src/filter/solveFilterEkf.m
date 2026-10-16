@@ -1,4 +1,4 @@
-function solution = solveFilterEkf(meas, epochs, rotations, rates, moon, method, cfg)
+function solution = solveFilterEkf(meas, epochs, rotations, rates, moon, method, cfg, lunar)
 % SOLVEFILTEREKF 伪距 + Doppler 扩展卡尔曼滤波，移植自 EKF-LuGRE（main5.m 与 main5_cv_orbit_weighted_jpl.m）。
 % 状态 [r; v; 钟差 c·δt (m); 钟漂 (m/s)]，8 维。
 %   ekfOrbit  ：地心 ICRF 中积分地球 + 月球（可选 J2）动力学及状态转移矩阵做预测，再做伪距/Doppler 量测更新。
@@ -6,6 +6,8 @@ function solution = solveFilterEkf(meas, epochs, rotations, rates, moon, method,
 %               钟差状态取 EKF；协方差 = EKF 协方差 + w(1-w)·dd'（两者不一致时不至过度自信）。
 % meas：每历元 buildFilterMeasurements 输出（cell）；rotations/rates：ICRF->ITRF 旋转及其导数（3x3xm）；
 % moon：struct gpsSeconds（列）与 state（n×6，地心 ICRF 月球 [r v]，m、m/s）。
+%   ekfLunarStatic：月面静止模型，状态 [p; 钟差; 钟漂]，p 为月固系固定位置（无过程噪声），
+%               ECEF 位置/速度 = lunar 的 c_k + M_k p、ċ_k + Ṁ_k p（computeMoonFixedFrame 带 rates）。
 % 初值：首个卫星数 >= minInitSatellites 的历元做伪距 LS（自地心起算）+ Doppler LS，不用 NAV；
 % 初始协方差 initCovariance='fixed' 为原项目的固定对角阵，'ls' 取 LS 形式协方差。
 p = cfg.filter.(method);
@@ -21,9 +23,15 @@ end
 sigmaOf = @(o) addSigma(o, p, cfg.filter);
 k0 = find(solution.satCount >= cfg.filter.minInitSatellites, 1);
 assert(~isempty(k0),'LuGRE:FilterInit','没有卫星数 >= %d 的历元，无法初始化滤波。',cfg.filter.minInitSatellites);
-[x, P] = initializeState(sigmaOf(meas{k0}), cfg.filter);
 solution.initialEpoch = k0;
 solution.acceptedCount(k0) = 2*solution.satCount(k0);
+if strcmp(method,'ekfLunarStatic')
+    assert(nargin >= 8 && isfield(lunar,'moonFixedToEcefRate'),'LuGRE:FilterLunar', ...
+        'ekfLunarStatic 需要带速度项的月固系输入 lunar（computeMoonFixedFrame 传入 rates）。');
+    solution = solveLunarStatic(solution, meas, epochs, lunar, sigmaOf, k0, p, cfg.filter);
+    return;
+end
+[x, P] = initializeState(sigmaOf(meas{k0}), cfg.filter);
 inertial = strcmp(method,'ekfOrbit');
 if inertial
     [x, P] = ecefToInertialFilter(x, P, rotations(:,:,k0), rates(:,:,k0));
@@ -68,6 +76,66 @@ for k = k0+1:m
     solution.rangeRateInnovationRmsMps(k) = info.rangeRateRms;
     solution = store(solution, k, x, P, inertial, R, Rd);
 end
+end
+
+function solution = solveLunarStatic(solution, meas, epochs, lunar, sigmaOf, k0, p, f)
+% 状态 z = [p; 钟差; 钟漂]。ECEF 的 [r; v; 钟差; 钟漂] = J_k*z + [c_k; ċ_k; 0; 0]，对 z 线性，
+% 量测更新沿用 measurementUpdate（伪距 + Doppler、门限、Joseph），雅可比乘 J_k。
+m = numel(epochs);
+solution.positionMoonFixed = nan(m,3);
+o = sigmaOf(meas{k0});
+[x, P8] = initializeState(o, f);
+M = lunar.moonFixedToEcef(:,:,k0);
+fixed = M'*(x(1:3) - lunar.moonEcef(k0,:)');
+% 钟漂：静止点速度已知，由 Doppler 加权平均求得（initializeState 的 Doppler LS 同时估计速度，
+% 远距离几何下与钟漂强相关）。
+velocity = lunar.moonEcefVelocity(k0,:)' + lunar.moonFixedToEcefRate(:,:,k0)*fixed;
+u = (o.satPosition - x(1:3)')./vecnorm(o.satPosition - x(1:3)',2,2);
+good = isfinite(o.rangeRate);
+w = 1./o.rangeRateSigma(good).^2;
+drift = sum(w.*(o.rangeRate(good) - sum(u(good,:).*(o.satVelocity(good,:) - velocity'),2)))/sum(w);
+z = [fixed; x(7); drift];
+if strcmp(f.initCovariance,'ls')
+    T = blkdiag(M', 1);
+    P = zeros(5);
+    P(1:4,1:4) = T*P8([1:3 7],[1:3 7])*T';
+    P(5,5) = 1/sum(w);
+else
+    P = diag(f.initStd([1:3 7 8]).^2);
+end
+solution = storeStatic(solution, k0, z, P, lunar);
+for k = k0+1:m
+    dt = epochs(k) - epochs(k-1);
+    F = eye(5); F(4,5) = dt;
+    Q = zeros(5); Q(4:5,4:5) = p.clockDriftPsd*[dt^3/3, dt^2/2; dt^2/2, dt];
+    z = F*z;
+    P = symmetric(F*P*F' + Q);
+    [J, offset] = staticMap(lunar, k);
+    [z, P, info] = measurementUpdate(z, P, sigmaOf(meas{k}), f.gateSigma, J, offset);
+    solution.acceptedCount(k) = info.accepted;
+    solution.rangeInnovationRmsM(k) = info.rangeRms;
+    solution.rangeRateInnovationRmsMps(k) = info.rangeRateRms;
+    solution = storeStatic(solution, k, z, P, lunar);
+end
+end
+
+function [J, offset] = staticMap(lunar, k)
+J = zeros(8,5);
+J(1:3,1:3) = lunar.moonFixedToEcef(:,:,k);
+J(4:6,1:3) = lunar.moonFixedToEcefRate(:,:,k);
+J(7,4) = 1; J(8,5) = 1;
+offset = [lunar.moonEcef(k,:)'; lunar.moonEcefVelocity(k,:)'; 0; 0];
+end
+
+function solution = storeStatic(solution, k, z, P, lunar)
+[J, offset] = staticMap(lunar, k);
+x = J*z + offset;
+solution.positionEcef(k,:) = x(1:3)';
+solution.velocityEcef(k,:) = x(4:6)';
+solution.positionMoonFixed(k,:) = z(1:3)';
+solution.clockM(k) = z(4);
+solution.clockDriftMps(k) = z(5);
+solution.formalStd3dM(k) = sqrt(trace(P(1:3,1:3))); % 月固系到 ECEF 为正交变换
 end
 
 function o = addSigma(o, p, f)
@@ -143,21 +211,25 @@ end
 Q([7 8],[7 8]) = p.clockDriftPsd*block;
 end
 
-function [x, P, info] = measurementUpdate(x, P, o, gateSigma)
+function [x, P, info] = measurementUpdate(x, P, o, gateSigma, J, offset)
 % 伪距 + 变化率联合更新；归一化新息超过 gateSigma 的观测剔除；Joseph 形式更新协方差。
+% 给出 J、offset 时，x 为降维状态 z，量测模型用 ECEF 状态 J*z + offset，雅可比为 H*J（ekfLunarStatic）。
 info = struct('accepted',0,'rangeRms',NaN,'rangeRateRms',NaN);
 n = numel(o.range);
 if n == 0, return; end
-toSat = o.satPosition - x(1:3)';
+mapped = nargin >= 5;
+if mapped, full8 = J*x + offset; else, full8 = x; end
+toSat = o.satPosition - full8(1:3)';
 rho = vecnorm(toSat,2,2);
 u = toSat./rho;
-relative = o.satVelocity - x(4:6)';
+relative = o.satVelocity - full8(4:6)';
 Hr = zeros(n,8); Hr(:,1:3) = -u; Hr(:,7) = 1;
 Hd = zeros(n,8); Hd(:,4:6) = -u; Hd(:,8) = 1;
 % ∂(u·v_rel)/∂r = -v_rel'(I - u u')/ρ
 Hd(:,1:3) = -(relative - sum(relative.*u,2).*u)./rho;
 H = [Hr; Hd];
-innovation = [o.range - rho - x(7); o.rangeRate - sum(u.*relative,2) - x(8)];
+innovation = [o.range - rho - full8(7); o.rangeRate - sum(u.*relative,2) - full8(8)];
+if mapped, H = H*J; end
 variance = [o.rangeSigma.^2; o.rangeRateSigma.^2];
 normalized = abs(innovation)./sqrt(max(sum((H*P).*H,2) + variance, eps));
 accepted = isfinite(normalized) & normalized <= gateSigma;
@@ -168,7 +240,7 @@ if ~any(accepted), return; end
 H = H(accepted,:); Rm = diag(variance(accepted));
 K = (P*H') / (H*P*H' + Rm);
 x = x + K*innovation(accepted);
-A = eye(8) - K*H;
+A = eye(numel(x)) - K*H;
 P = symmetric(A*P*A' + K*Rm*K');
 end
 

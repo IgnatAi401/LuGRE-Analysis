@@ -18,8 +18,9 @@ raw = addSatelliteStates(raw, gps, galileo, cfg.ephemeris.maxAgeS);
 
 m = numel(epochs);
 meas = cell(m,1);
+rawByEpoch = groupRawByEpoch(raw, epochs);
 for k = 1:m
-    meas{k} = buildFilterMeasurements(selectEpochMeasurements(epochs(k), raw), cfg);
+    meas{k} = buildFilterMeasurements(selectEpochMeasurements(epochs(k), rawByEpoch{k}), cfg);
 end
 counts = cellfun(@(o)numel(o.range), meas);
 results.observationCount = counts;
@@ -30,6 +31,10 @@ step = cfg.moon.stepMinutes*60;
 grid = (floor(epochs(1)/step)*step - step : step : ceil(epochs(end)/step)*step + step)';
 moonTable = fetchMoonEphemeris(grid, cfg);
 moon = struct('gpsSeconds',grid,'state',moonTable(:,2:7)*1000); % JD 列不转换
+lunar = [];
+if any(strcmp(cfg.filter.methods,'ekfLunarStatic'))
+    lunar = computeMoonFixedFrame(epochs, rotations, cfg, rates); % 月面静止模型（月固系固定位置）
+end
 
 results.navPosition = [];
 if ~isempty(navPath)
@@ -42,7 +47,7 @@ end
 for k = 1:numel(cfg.filter.methods)
     method = cfg.filter.methods{k};
     t = tic;
-    solution = solveFilterEkf(meas, epochs, rotations, rates, moon, method, cfg);
+    solution = solveFilterEkf(meas, epochs, rotations, rates, moon, method, cfg, lunar);
     solution.seconds = toc(t);
     results.(method) = solution;
     fprintf('%s: 第 %d 个历元初始化，量测接受率 %.1f%%，伪距新息 RMS 中位数 %.1f m，形式 3D std 中位数 %.0f m，%.1f s\n', ...
@@ -69,8 +74,8 @@ end
 
 function validateFilterConfig(cfg)
 f = cfg.filter;
-assert(iscellstr(f.methods) && ~isempty(f.methods) && all(ismember(f.methods,{'ekfOrbit','ekfCvBlend'})), ...
-    'LuGRE:Config','filter.methods 只能包含 ekfOrbit、ekfCvBlend。');
+assert(iscellstr(f.methods) && ~isempty(f.methods) && all(ismember(f.methods,{'ekfOrbit','ekfCvBlend','ekfLunarStatic'})), ...
+    'LuGRE:Config','filter.methods 只能包含 ekfOrbit、ekfCvBlend、ekfLunarStatic。');
 validateattributes(f.minInitSatellites,{'double'},{'scalar','integer','>=',4});
 validateattributes(f.initStd,{'double'},{'numel',8,'positive','finite'});
 assert(any(strcmp(f.initCovariance,{'fixed','ls'})),'LuGRE:Config','filter.initCovariance 必须为 fixed 或 ls。');

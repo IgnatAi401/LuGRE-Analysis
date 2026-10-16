@@ -102,12 +102,68 @@ assert(gridBadErr < 2*max(gridErr) + 5, '粗差下 dpeGrid %.1f m（无粗差 %.
 fprintf('testBatch: dpeGrid 无粗差 %.1f m，粗差下 %.1f m，与 L1 最优点差 %.2f m，%d 点 %.1f s\n', ...
     max(gridErr), gridBadErr, max(gap), gs.search.totalPoints, gs.search.seconds);
 
+% 月固系静止模型（cfg.batch.dynamics='lunarStatic'）：固定点 p 随月心平移、随月球自转，
+% 中间 600 s 无观测（样条列无支撑应被剔除），从 30 km 初值偏差出发三种方法都应收敛到真值附近。
+staticCfg = lugreConfig(); staticCfg.batch.dynamics = 'lunarStatic';
+staticCfg.batch.clockKnotSpacingS = 120;
+lunarEpochs = tRef + (-900:900)';
+mL = numel(lunarEpochs); tauL = lunarEpochs - tRef;
+spin = 2.6617e-6*tauL + 0.3; % 月固系相对“ECEF”（此处取惯性系）绕倾斜轴转动
+axis = [0.2; -0.3; 0.93]; axis = axis/norm(axis);
+lunar.moonEcef = [3.8e8 + 50*tauL, 1000*tauL, 2e7 + 0*tauL];
+lunar.moonFixedToEcef = zeros(3,3,mL);
+for k = 1:mL, lunar.moonFixedToEcef(:,:,k) = axang2rotm([axis' spin(k)]); end
+pTrue = [776.6e3; 1448.4e3; 552.2e3];
+truthL = lunar.moonEcef + permute(pagemtimes(lunar.moonFixedToEcef, pTrue), [3 1 2]);
+gapEpochs = abs(tauL) < 300;
+rows = {};
+for k = find(~gapEpochs)'
+    for j = randperm(6, randi(6))
+        angle = phase(j) + n*tauL(k);
+        node = [cos(planes(j)); sin(planes(j)); 0];
+        normal = [0;0;1]; inPlane = cross(normal,node)*cosd(55) + normal*sind(55);
+        sat = radius*(cos(angle)*node + sin(angle)*inPlane);
+        rows{end+1} = [k, sat', norm(truthL(k,:)'-sat) + clock(lunarEpochs(k)) + 3*randn, 0]; %#ok<AGROW>
+    end
+end
+data = cell2mat(rows');
+lunarObs = struct('epochIndex',data(:,1),'satPosition',data(:,2:4),'range',data(:,5), ...
+    'weight',ones(size(data,1),1),'signalId',data(:,6));
+lunarRotations = repmat(eye(3),1,1,mL);
+lunarStart = pTrue + [20e3; -15e3; 15e3];
+for method = {'dpeIrls','ls','dpeGrid'}
+    if strcmp(method{1},'dpeGrid')
+        s = solveBatchGrid(lunarObs,lunarEpochs,lunarRotations,lunarStart,[],tRef,staticCfg,lunar);
+    else
+        s = solveBatchIrls(lunarObs,lunarEpochs,lunarRotations,lunarStart,[],tRef,method{1},staticCfg,lunar);
+    end
+    err = norm(s.state - pTrue);
+    assert(s.converged && strcmp(s.dynamics,'lunarStatic') && numel(s.state) == 3 && ...
+        err < 5*s.formalStd3dM(1) + 1, '%s 月面静止模型误差 %.1f m（形式 std %.1f m）', ...
+        method{1}, err, s.formalStd3dM(1));
+    assert(max(vecnorm(s.positionEcef - truthL,2,2)) < err + 1e-6);
+    if ~strcmp(method{1},'dpeGrid')
+        % 空档内无支撑的样条列被剔除，依赖它们的历元钟差为 NaN，其余钟差接近真值。
+        full = ceil((max(tauL(~gapEpochs))-min(tauL(~gapEpochs)))/120) + 3;
+        assert(numel(s.clockCoefficientsM) < full && any(isnan(s.clockM(gapEpochs))));
+        assert(max(abs(s.clockM(~gapEpochs) - clock(lunarEpochs(~gapEpochs)))) < 5*s.formalStd3dM(1) + 20);
+    end
+    fprintf('testBatch: lunarStatic %s 误差 %.1f m（形式 std %.1f m）\n', method{1}, err, s.formalStd3dM(1));
+end
+% 月固系与 ICRF 互转（纯矩阵运算，此处“ICRF”即合成场景的惯性系）：与模型位置一致，往返得回固定点。
+toMoonFixed = pagetranspose(lunar.moonFixedToEcef);
+inertial = moonFixedToIcrf(pTrue', lunar.moonEcef, toMoonFixed);
+assert(max(abs(inertial - truthL),[],'all') < 1e-6);
+assert(max(abs(icrfToMoonFixed(inertial, lunar.moonEcef, toMoonFixed) - pTrue'),[],'all') < 1e-6);
+
 % 自动选星历：日期匹配，缺文件明确报错。
 cfg.data.rinex = 'auto'; cfg.data.rinexDir = fullfile(root,'data','rinex');
 files = selectRinexFiles(cfg, 1420991587);
 assert(endsWith(files{1},'BRDC00IGS_R_20250150000_01D_MN.rnx'));
+emptyDir = tempname; mkdir(emptyDir); removeEmpty = onCleanup(@()rmdir(emptyDir));
+missingCfg = cfg; missingCfg.data.rinexDir = emptyDir; % 空目录：任何日期都缺星历（data/rinex 已覆盖全部 OP）
 try
-    selectRinexFiles(cfg, 1421117218); % 2025-01-17，本项目没有该日星历
+    selectRinexFiles(missingCfg, 1421117218);
     error('test:NoError','应报缺少星历');
 catch ME
     assert(strcmp(ME.identifier,'LuGRE:RinexMissing'));

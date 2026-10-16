@@ -3,6 +3,8 @@ function results = runBatchPositioning(cfg)
 % 以 RAW 历元为时间轴，不足 4 颗星的历元也参与；初值来自快照 LS，不使用 NAV 位置/速度。
 % NAV 若存在仅用于对比（及可选的初始化后备 cfg.batch.allowNavInit）。
 % dpeGrid 用 solveBatchGrid（每历元钟差），dpeIrls 与 ls 用 solveBatchIrls（样条/多项式钟差）。
+% cfg.batch.dynamics：'freeFlight' 估计 tRef 的 ICRF 位置速度并按地月引力积分；
+% 'lunarStatic' 估计月固系（DE405 主轴系）固定位置，用于着陆后的月面窗口（computeMoonFixedFrame）。
 validateBatchConfig(cfg);
 [rawPath, navPath] = findTelemetryFiles(cfg.data.root, cfg.data.window);
 raw = readTelemetryRaw(rawPath);
@@ -22,8 +24,9 @@ raw = addSatelliteStates(raw, gps, galileo, cfg.ephemeris.maxAgeS);
 m = numel(epochs);
 obsCfg = cfg; obsCfg.enable.legacyIonosphere = false;
 epochObs = cell(m,1);
+rawByEpoch = groupRawByEpoch(raw, epochs);
 for k = 1:m
-    epochObs{k} = buildObservations(selectEpochMeasurements(epochs(k), raw), zeros(3,1), obsCfg);
+    epochObs{k} = buildObservations(selectEpochMeasurements(epochs(k), rawByEpoch{k}), zeros(3,1), obsCfg);
 end
 counts = cellfun(@(o)numel(o.range), epochObs);
 assert(any(counts > 0),'LuGRE:NoEpochs','没有可用观测（检查星历覆盖）。');
@@ -57,25 +60,35 @@ if ~isempty(navPath)
     navPosition(in,:) = [[nav(loc(in)).posX]', [nav(loc(in)).posY]', [nav(loc(in)).posZ]'];
 end
 results.navPosition = navPosition;
-init = initBatchState(epochObs, epochs, rotations, tRef, navPosition, cfg);
+static = strcmp(cfg.batch.dynamics,'lunarStatic');
+lunar = [];
+if static, lunar = computeMoonFixedFrame(epochs, rotations, cfg); end
+init = initBatchState(epochObs, epochs, rotations, tRef, navPosition, cfg, lunar);
 results.init = init;
 fprintf('初值来源 %s：快照 LS 有效 %d 个历元。\n', init.source, nnz(all(isfinite(init.snapshotPosition),2)));
-moon = fetchMoonEphemeris(tRef, cfg);
-moon0 = moon(2:7)'*1000; % JD 列不转换
+if static
+    moon0 = []; % 静止模型不积分轨道
+    results.lunar = lunar;
+    fprintf('月固系静止模型：初值 %s\n', describeMoonFixed(init.state));
+else
+    moon = fetchMoonEphemeris(tRef, cfg);
+    moon0 = moon(2:7)'*1000; % JD 列不转换
+end
 results.tRef = tRef;
 results.moon0 = moon0;
 
 for k = 1:numel(cfg.batch.methods)
     method = cfg.batch.methods{k};
     if strcmp(method,'dpeGrid')
-        solution = solveBatchGrid(obs, epochs, rotations, init.state, moon0, tRef, cfg);
+        solution = solveBatchGrid(obs, epochs, rotations, init.state, moon0, tRef, cfg, lunar);
     else
-        solution = solveBatchIrls(obs, epochs, rotations, init.state, moon0, tRef, method, cfg);
+        solution = solveBatchIrls(obs, epochs, rotations, init.state, moon0, tRef, method, cfg, lunar);
     end
     results.(method) = solution;
     fprintf('%s 批处理: 收敛=%d, 外迭代 %d, 观测 %d, 参数 %d, 稳健残差尺度 %.2f m, 形式 3D std 中位数 %.0f m\n', ...
         upper(method), solution.converged, solution.iterations, solution.observationCount, ...
         solution.parameterCount, solution.robustSigmaM, median(solution.formalStd3dM));
+    if static, fprintf('    月固系位置 %s\n', describeMoonFixed(solution.state)); end
     for j = 1:numel(solution.biasSignals)
         fprintf('    signal %d 相对 signal %d 偏差 %.2f m\n', solution.biasSignals(j), ...
             solution.referenceSignal, solution.signalBiasM(j));
@@ -103,8 +116,10 @@ end
 
 function validateBatchConfig(cfg)
 b = cfg.batch;
-assert(iscellstr(b.methods) && ~isempty(b.methods) && all(ismember(b.methods,{'dpeIrls','ls','dpeGrid'})), ...
-    'LuGRE:Config','batch.methods 只能包含 dpeIrls、ls、dpeGrid。');
+assert(any(strcmp(b.dynamics,{'freeFlight','lunarStatic'})),'LuGRE:Config', ...
+    'batch.dynamics 必须为 freeFlight 或 lunarStatic。');
+assert((iscellstr(b.methods) || isempty(b.methods)) && all(ismember(b.methods,{'dpeIrls','ls','dpeGrid'})), ...
+    'LuGRE:Config','batch.methods 只能包含 dpeIrls、ls、dpeGrid（为空时只计算快照 LS 初值）。');
 assert(any(strcmp(b.clockModel,{'polynomial','spline'})),'LuGRE:Config', ...
     'batch.clockModel 必须为 polynomial 或 spline。');
 validateattributes(b.clockDegree,{'double'},{'scalar','integer','nonnegative'});
@@ -115,6 +130,11 @@ validateattributes(b.weakSearch.stepM,{'double'},{'scalar','positive','finite'})
 validateattributes(b.maxOuterIterations,{'double'},{'scalar','integer','positive'});
 validateattributes(b.irlsEpsilonM,{'double'},{'scalar','positive','finite'});
 validateattributes(cfg.run.maxEpochs,{'double'},{'scalar','positive'});
+end
+
+function text = describeMoonFixed(p)
+text = sprintf('[%.3f %.3f %.3f] km（纬度 %.4f°，经度 %.4f°，月心距 %.3f km）', p/1e3, ...
+    asind(p(3)/norm(p)), atan2d(p(2),p(1)), norm(p)/1e3);
 end
 
 function out = ternary(condition, a, b)

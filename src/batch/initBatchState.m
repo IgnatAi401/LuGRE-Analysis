@@ -1,6 +1,8 @@
-function init = initBatchState(epochObs, epochs, rotations, tRef, navPosition, cfg)
+function init = initBatchState(epochObs, epochs, rotations, tRef, navPosition, cfg, lunar)
 % INITBATCHSTATE 批处理初值：各历元快照 LS（自地心起算、不用 NAV），
 % 转到 ICRF 后对时间做稳健（L1）线性拟合，得到 tRef 的 [r0;v0]。
+% 给出 lunar（computeMoonFixedFrame，lunarStatic 模型）时改为把快照解转到月固系，
+% 各轴取中位数作为固定位置 p 的初值（3x1）。
 % navPosition：与 epochs 对齐的 NAV 位置（无则为空），仅在 allowNavInit 时作后备。
 opts = cfg.batch;
 m = numel(epochs);
@@ -28,6 +30,18 @@ if nnz(all(isfinite(fitPosition),2)) < opts.initMinEpochs
     fitPosition = navPosition; source = 'nav';
 end
 good = find(all(isfinite(fitPosition),2));
+init.source = source;
+init.snapshotPosition = snapshot;
+init.snapshotClockM = snapshotClock;
+if nargin >= 7 && ~isempty(lunar)
+    % p_k = M_k'*(x_k - c_k)，M_k 为月固系 -> ECEF 的正交矩阵。
+    relative = permute(fitPosition(good,:) - lunar.moonEcef(good,:), [2 3 1]);
+    fixed = permute(pagemtimes(lunar.moonFixedToEcef(:,:,good), 'transpose', relative, 'none'), [3 1 2]);
+    init.state = median(fixed, 1)';
+    init.snapshotMoonFixed = nan(m,3);
+    init.snapshotMoonFixed(good,:) = fixed;
+    return;
+end
 inertial = zeros(numel(good),3);
 for j = 1:numel(good)
     inertial(j,:) = (rotations(:,:,good(j))'*fitPosition(good(j),:)')';
@@ -38,9 +52,6 @@ for axis = 1:3
     coefficients(:,axis) = fitL1(design, inertial(:,axis));
 end
 init.state = [coefficients(1,:)'; coefficients(2,:)'];
-init.source = source;
-init.snapshotPosition = snapshot;
-init.snapshotClockM = snapshotClock;
 end
 
 function p = fitL1(A, y)

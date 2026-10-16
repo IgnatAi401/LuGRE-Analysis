@@ -53,5 +53,38 @@ for method = {'ekfOrbit','ekfCvBlend'}
         assert(abs(s.clockDriftMps(end) - 30) < 1, 'ekfOrbit 钟漂 %.2f m/s（真值 30）', s.clockDriftMps(end));
     end
 end
+% 月面静止模型 ekfLunarStatic：固定点随“月心”平移并绕倾斜轴转动，ECEF 位置/速度对 p 线性。
+tau = epochs - tRef;
+spinRate = 2e-5; spinAxis = [0.2; -0.3; 0.93]; spinAxis = spinAxis/norm(spinAxis);
+skew = [0 -spinAxis(3) spinAxis(2); spinAxis(3) 0 -spinAxis(1); -spinAxis(2) spinAxis(1) 0];
+moonVelocity = [50 1000 0];
+lunar.moonEcef = [8e7 5e7 2e7] + tau*moonVelocity; % 与上面自由飞行场景同一距离量级
+lunar.moonEcefVelocity = repmat(moonVelocity, m, 1);
+lunar.moonFixedToEcef = zeros(3,3,m); lunar.moonFixedToEcefRate = zeros(3,3,m);
+for k = 1:m
+    lunar.moonFixedToEcef(:,:,k) = axang2rotm([spinAxis' spinRate*tau(k) + 0.3]);
+    lunar.moonFixedToEcefRate(:,:,k) = spinRate*skew*lunar.moonFixedToEcef(:,:,k);
+end
+pTrue = [776.6e3; 1448.4e3; 552.2e3];
+staticPos = lunar.moonEcef + permute(pagemtimes(lunar.moonFixedToEcef, pTrue), [3 1 2]);
+staticVel = lunar.moonEcefVelocity + permute(pagemtimes(lunar.moonFixedToEcefRate, pTrue), [3 1 2]);
+assert(max(vecnorm(diff(staticPos) - (staticVel(1:end-1,:)+staticVel(2:end,:))/2,2,2)) < 1e-3, ...
+    '合成速度与位置差分不一致');
+staticMeas = meas;
+for k = 1:m
+    toSat = meas{k}.satPosition - staticPos(k,:);
+    u = toSat./vecnorm(toSat,2,2);
+    staticMeas{k}.range = vecnorm(toSat,2,2) + clockM(epochs(k)) + 5*randn(numel(meas{k}.range),1);
+    staticMeas{k}.rangeRate = sum(u.*(meas{k}.satVelocity - staticVel(k,:)),2) + 30 + 0.05*randn(numel(meas{k}.range),1);
+end
+s = solveFilterEkf(staticMeas, epochs, rotations, rates, moon, 'ekfLunarStatic', cfg, lunar);
+err = vecnorm(s.positionEcef - staticPos,2,2);
+fixedErr = vecnorm(s.positionMoonFixed - pTrue',2,2);
+assert(s.initialEpoch == 1 && all(isfinite(err)) && max(abs(err - fixedErr)) < 1e-3);
+assert(err(end) < 3*s.formalStd3dM(end) && err(end) < 0.2*err(1), ...
+    'ekfLunarStatic 末历元误差 %.0f m（初值 %.0f m，形式 3σ %.0f m）', err(end), err(1), 3*s.formalStd3dM(end));
+assert(abs(s.clockDriftMps(end) - 30) < 1, 'ekfLunarStatic 钟漂 %.2f m/s（真值 30）', s.clockDriftMps(end));
+fprintf('testFilter: ekfLunarStatic 初值误差 %.0f m，末历元误差 %.0f m，形式 3D std %.0f m\n', ...
+    err(1), err(end), s.formalStd3dM(end));
 fprintf('testFilter: all checks passed.\n');
 end
